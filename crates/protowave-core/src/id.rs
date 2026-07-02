@@ -193,7 +193,10 @@ pub struct WaveletName {
 
 impl WaveletName {
     pub fn new(wave_id: WaveId, wavelet_id: WaveletId) -> Self {
-        Self { wave_id, wavelet_id }
+        Self {
+            wave_id,
+            wavelet_id,
+        }
     }
 }
 
