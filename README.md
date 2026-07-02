@@ -39,7 +39,15 @@ npm run build          # type-check + production build
 
 ## Status
 
-**Phase 2 (Wave parity)** — see PRD §12 for the roadmap.
+**Phase 3 (Federation)** — see PRD §12 for the roadmap.
+
+Two ProtoWave servers can now federate: add `bob@other.server` to a wave
+and both servers hold live replicas — cross-server co-editing converges,
+membership is distributed by the wave's home server (signed announcements),
+every s2s message is ed25519-signed with TOFU key pinning, and
+state-vector anti-entropy back-fills anything missed. Configure with
+`PROTOWAVE_PEERS="other.server=http://host:port"` and
+`PROTOWAVE_PUBLIC_URL`.
 
 Working now: accounts (argon2id + sessions), wave creation and inbox with
 unread badges, real-time collaborative editing (yrs/Yjs CRDTs over the

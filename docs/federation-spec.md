@@ -1,6 +1,8 @@
-# ProtoWave Federation Protocol — Draft 0
+# ProtoWave Federation Protocol — v0 (implemented)
 
-**Status:** working draft (Phase 0). Normative wording lands before Phase 3 implementation freeze. PRD §8.3 is the product-level summary; this document will become the wire-level specification.
+**Status:** v0 implemented (Phase 3). PRD §8.3 is the product-level summary. Message schemas live in `crates/protowave-proto/proto/protowave/v1/federation.proto`; the reference implementation is `server/src/federation.rs` with the interop suite in `server/tests/federation.rs`.
+
+**v0 transport note:** messages travel as signed protobuf bodies over HTTP POST on each server's public URL (`/federation/v0/push|sync|announce`), not gRPC — the tonic stack does not build on the project's pinned rustc 1.75 toolchain, and security is message-level (ed25519 over `"protowave-fed-v0\n" ‖ path ‖ "\n" ‖ body`, keys pinned TOFU via `/.well-known/protowave`), so the transport carries no trust. The schema is transport-agnostic; migrating to gRPC/TLS is a contained change. Peer resolution v0: static map (`PROTOWAVE_PEERS`), with `.well-known` used for key discovery.
 
 ## 1. Scope
 

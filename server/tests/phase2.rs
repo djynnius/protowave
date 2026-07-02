@@ -21,7 +21,7 @@ struct TestServer {
 async fn spawn() -> TestServer {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(FileStore::open(dir.path(), false).unwrap());
-    let state = AppState::build(store, "localhost", dir.path(), false).unwrap();
+    let state = AppState::build(store, "localhost", dir.path(), false, Default::default()).unwrap();
     TestServer {
         router: app(state.clone()),
         state,

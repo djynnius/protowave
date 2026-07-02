@@ -7,6 +7,7 @@ pub mod attachments;
 pub mod auth;
 pub mod cas;
 pub mod engine;
+pub mod federation;
 pub mod search;
 pub mod store;
 pub mod store_pg;
@@ -22,6 +23,7 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use cas::Cas;
 use engine::Engine;
+use federation::{Federation, FederationConfig};
 use search::{SearchIndex, TantivyIndex};
 use store::{FileStore, WaveStore};
 use store_pg::PgStore;
@@ -31,24 +33,27 @@ pub struct AppState {
     pub engine: Engine,
     pub cas: Cas,
     pub search: Arc<dyn SearchIndex>,
+    pub federation: Federation,
     /// This server's federation domain (PRD §8.2).
     pub domain: String,
 }
 
 impl AppState {
-    /// `data_dir` hosts the CAS blobs and search index regardless of which
-    /// WaveStore backend is in use.
+    /// `data_dir` hosts the CAS blobs, search index and server signing key
+    /// regardless of which WaveStore backend is in use.
     pub fn build(
         store: Arc<dyn WaveStore>,
         domain: impl Into<String>,
         data_dir: &Path,
         fsync: bool,
+        fed_config: FederationConfig,
     ) -> std::io::Result<Arc<Self>> {
         let state = Arc::new(Self {
             engine: Engine::new(store.clone()),
             store,
             cas: Cas::open(data_dir.join("blobs"), fsync)?,
             search: Arc::new(TantivyIndex::open(&data_dir.join("search"))?),
+            federation: Federation::new(fed_config, data_dir)?,
             domain: domain.into(),
         });
         spawn_search_indexer(state.clone());
@@ -68,7 +73,20 @@ impl AppState {
             }
             Err(_) => Arc::new(FileStore::open(&data_dir, fsync)?),
         };
-        Self::build(store, domain, Path::new(&data_dir), fsync)
+        // PROTOWAVE_PEERS: "domainA=http://host:port,domainB=http://..."
+        let peers = std::env::var("PROTOWAVE_PEERS")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|pair| {
+                let (d, url) = pair.trim().split_once('=')?;
+                Some((d.to_string(), url.to_string()))
+            })
+            .collect();
+        let fed_config = FederationConfig {
+            public_url: std::env::var("PROTOWAVE_PUBLIC_URL").unwrap_or_default(),
+            peers,
+        };
+        Self::build(store, domain, Path::new(&data_dir), fsync, fed_config)
     }
 }
 
@@ -121,6 +139,10 @@ pub fn app(state: Arc<AppState>) -> Router {
             get(attachments::list).post(attachments::upload),
         )
         .route("/api/attachments/:hash", get(attachments::download))
+        .route("/.well-known/protowave", get(federation::well_known))
+        .route(federation::PUSH_PATH, post(federation::handle_push))
+        .route(federation::SYNC_PATH, post(federation::handle_sync))
+        .route(federation::ANNOUNCE_PATH, post(federation::handle_announce))
         .with_state(state);
 
     // Single-binary deploy (G11): serve the built SPA when present, with

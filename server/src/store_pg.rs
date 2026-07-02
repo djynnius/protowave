@@ -65,6 +65,11 @@ CREATE TABLE IF NOT EXISTS attachments (
 );
 CREATE INDEX IF NOT EXISTS attachments_wave ON attachments (wave);
 CREATE INDEX IF NOT EXISTS waves_activity ON waves (last_activity_ms DESC);
+ALTER TABLE waves ADD COLUMN IF NOT EXISTS acl_version BIGINT NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS peer_keys (
+    domain TEXT PRIMARY KEY,
+    public_key TEXT NOT NULL
+);
 ";
 
 pub struct PgStore {
@@ -101,6 +106,7 @@ impl PgStore {
             created_by: row.get("created_by"),
             created_ms: row.get::<_, i64>("created_ms") as u64,
             last_activity_ms: row.get::<_, i64>("last_activity_ms") as u64,
+            acl_version: row.get::<_, i64>("acl_version") as u64,
         }
     }
 }
@@ -271,10 +277,10 @@ impl WaveStore for PgStore {
         let client = self.client().await?;
         client
             .execute(
-                "INSERT INTO waves (wave, title, participants, created_by, created_ms, last_activity_ms)
-                 VALUES ($1, $2, $3, $4, $5, $6)
+                "INSERT INTO waves (wave, title, participants, created_by, created_ms, last_activity_ms, acl_version)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)
                  ON CONFLICT (wave) DO UPDATE SET
-                    title = $2, participants = $3, last_activity_ms = $6",
+                    title = $2, participants = $3, last_activity_ms = $6, acl_version = $7",
                 &[
                     &meta.wave,
                     &meta.title,
@@ -282,6 +288,7 @@ impl WaveStore for PgStore {
                     &meta.created_by,
                     &(meta.created_ms as i64),
                     &(meta.last_activity_ms as i64),
+                    &(meta.acl_version as i64),
                 ],
             )
             .await
@@ -392,6 +399,31 @@ impl WaveStore for PgStore {
             uploader: r.get("uploader"),
             created_ms: r.get::<_, i64>("created_ms") as u64,
         }))
+    }
+
+    async fn put_peer_key(&self, domain: &str, public_key_hex: &str) -> io::Result<()> {
+        let client = self.client().await?;
+        client
+            .execute(
+                "INSERT INTO peer_keys (domain, public_key) VALUES ($1, $2)
+                 ON CONFLICT (domain) DO NOTHING",
+                &[&domain, &public_key_hex],
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn get_peer_key(&self, domain: &str) -> io::Result<Option<String>> {
+        let client = self.client().await?;
+        let row = client
+            .query_opt(
+                "SELECT public_key FROM peer_keys WHERE domain = $1",
+                &[&domain],
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(row.map(|r| r.get(0)))
     }
 
     async fn list_attachments(&self, wave: &str) -> io::Result<Vec<AttachmentMeta>> {

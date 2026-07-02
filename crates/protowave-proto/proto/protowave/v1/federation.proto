@@ -1,0 +1,64 @@
+// ProtoWave server-to-server federation protocol, v0 (PRD §8.3,
+// docs/federation-spec.md).
+//
+// Transport (v0): HTTP POST on the peer's public URL with a binary-encoded
+// message body. Authentication is message-level, not transport-level: the
+// sender's domain travels in the `X-ProtoWave-Domain` header and an ed25519
+// signature over `"protowave-fed-v0" ‖ path ‖ body` in
+// `X-ProtoWave-Signature` (hex). Receivers resolve and pin the sender's key
+// via GET /.well-known/protowave on first contact (TOFU). The message
+// schema is transport-agnostic; a gRPC transport can carry the same
+// messages later.
+
+syntax = "proto3";
+
+package protowave.v1;
+
+// GET /.well-known/protowave (unauthenticated, JSON mirror also served).
+message ServerInfo {
+  string domain = 1;
+  // Base URL peers should call, e.g. "http://10.0.0.5:80".
+  string public_url = 2;
+  // ed25519 public key, 32 bytes.
+  bytes public_key = 3;
+  uint32 protocol_version = 4;
+}
+
+// POST /federation/v0/push — one locally-originated update, fanned out to
+// every peer domain on the wavelet's wave (content plane, FR-48..49).
+message UpdateBatch {
+  string wavelet = 1;
+  bytes update = 2;
+  // ACL version the sender held when authoring (removed-participant rule).
+  uint64 acl_version = 3;
+}
+
+// POST /federation/v0/sync — anti-entropy (FR-50). Request carries the
+// caller's state vector; the response returns the missing diff and the
+// responder's state vector so the caller can push back in turn.
+message FedSyncRequest {
+  string wavelet = 1;
+  bytes state_vector = 2;
+}
+
+message FedSyncResponse {
+  bytes state_vector = 1;
+  bytes diff = 2;
+}
+
+// POST /federation/v0/announce — control plane (FR-51): the wave's home
+// server distributes the authoritative participant list. Only accepted
+// when the sender IS the wave's home domain.
+message WaveAnnouncement {
+  string wave = 1;
+  string title = 2;
+  repeated string participants = 3;
+  string created_by = 4;
+  uint64 created_ms = 5;
+  uint64 acl_version = 6;
+}
+
+message FedAck {
+  bool ok = 1;
+  string error = 2;
+}

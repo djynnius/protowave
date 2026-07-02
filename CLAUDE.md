@@ -8,14 +8,16 @@ budgets (NFR-Cx), architecture decisions (ADR-1..5), and the phase roadmap
 
 ## Status
 
-- **Phase 0** (foundations), **Phase 1** (real-time collaboration), and
-  **Phase 2** (search, attachments, markdown, playback, read-state,
-  PostgreSQL backend) are complete and deployed.
-- **Phase 3 (Federation) is next**: implement `docs/federation-spec.md`
-  (signed update batches over tonic gRPC, content-plane replication,
-  home-server control plane).
-- Deferred from Phase 2: OIDC login (FR-3), in-text anchored inline
-  replies (FR-19 — needs a ProseMirror decoration spike).
+- **Phases 0–3 complete**: foundations, real-time collaboration, Wave
+  parity (search/attachments/markdown/playback/read-state/PostgreSQL), and
+  **federation** (signed s2s over HTTP — see `server/src/federation.rs`,
+  spec in `docs/federation-spec.md`; tonic/gRPC deferred because it does
+  not build on rustc 1.75). Two-server interop suite:
+  `server/tests/federation.rs`.
+- **Phase 4 (Translation) is next** per PRD §12.
+- Deferred: OIDC login (FR-3), in-text anchored inline replies (FR-19),
+  participant *removal* + federated blob fetch for attachments, gRPC/TLS
+  transport for federation.
 
 ## Critical toolchain constraint (read before touching Cargo.toml)
 

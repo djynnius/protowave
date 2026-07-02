@@ -35,13 +35,18 @@ pub struct Account {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaveMeta {
-    /// WaveId serialized form (`domain/wave-id`).
+    /// WaveId serialized form (`domain/wave-id`). The wave's domain is its
+    /// home server — the control-plane authority (PRD §8.3).
     pub wave: String,
     pub title: String,
     pub participants: Vec<String>,
     pub created_by: String,
     pub created_ms: u64,
     pub last_activity_ms: u64,
+    /// Bumped on every membership change; federated batches carry the
+    /// version they were authored under (FR-51).
+    #[serde(default)]
+    pub acl_version: u64,
 }
 
 /// Attachment metadata (FR-37). The blob itself lives in the CAS keyed by
@@ -110,6 +115,10 @@ pub trait WaveStore: Send + Sync + 'static {
     async fn put_attachment(&self, meta: &AttachmentMeta) -> io::Result<()>;
     async fn get_attachment(&self, hash: &str) -> io::Result<Option<AttachmentMeta>>;
     async fn list_attachments(&self, wave: &str) -> io::Result<Vec<AttachmentMeta>>;
+
+    // Pinned federation peer keys, TOFU (NFR-15).
+    async fn put_peer_key(&self, domain: &str, public_key_hex: &str) -> io::Result<()>;
+    async fn get_peer_key(&self, domain: &str) -> io::Result<Option<String>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +134,8 @@ struct Tables {
     read_marks: HashMap<String, HashMap<String, u64>>,
     #[serde(default)]
     attachments: HashMap<String, AttachmentMeta>,
+    #[serde(default)]
+    peer_keys: HashMap<String, String>,
 }
 
 pub struct FileStore {
@@ -384,6 +395,19 @@ impl WaveStore for FileStore {
         out.sort_by(|a, b| b.created_ms.cmp(&a.created_ms));
         Ok(out)
     }
+
+    async fn put_peer_key(&self, domain: &str, public_key_hex: &str) -> io::Result<()> {
+        let mut tables = self.tables.lock().unwrap();
+        tables
+            .peer_keys
+            .insert(domain.to_string(), public_key_hex.to_string());
+        self.flush_tables(&tables)
+    }
+
+    async fn get_peer_key(&self, domain: &str) -> io::Result<Option<String>> {
+        let tables = self.tables.lock().unwrap();
+        Ok(tables.peer_keys.get(domain).cloned())
+    }
 }
 
 #[cfg(test)]
@@ -443,6 +467,7 @@ mod tests {
                     created_by: ada.to_string(),
                     created_ms: i as u64,
                     last_activity_ms: i as u64,
+                    acl_version: 1,
                 })
                 .await
                 .unwrap();

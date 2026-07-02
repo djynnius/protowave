@@ -72,6 +72,7 @@ async fn pg_store_full_contract() {
             created_by: ada.to_string(),
             created_ms: 1,
             last_activity_ms: 1,
+            acl_version: 1,
         })
         .await
         .unwrap();

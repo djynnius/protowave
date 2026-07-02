@@ -77,6 +77,7 @@ pub async fn create_wave(
         created_by: me.to_string(),
         created_ms: now,
         last_activity_ms: now,
+        acl_version: 1,
     };
     state.store.put_wave(&meta).await?;
     tracing::info!(wave = %meta.wave, by = %me, "wave created");
@@ -115,7 +116,9 @@ pub async fn add_participant(
         .participant
         .parse()
         .map_err(|e| ApiError::bad_request(format!("invalid participant: {e}")))?;
-    if state.store.get_account(&added).await?.is_none() {
+    // Local participants must exist; remote ones are validated by their own
+    // server when they authenticate there (FR-48).
+    if added.domain() == state.domain && state.store.get_account(&added).await?.is_none() {
         return Err(ApiError::bad_request("no such account on this server"));
     }
 
@@ -127,12 +130,24 @@ pub async fn add_participant(
     if !meta.participants.contains(&me.to_string()) {
         return Err(ApiError(StatusCode::FORBIDDEN, "not a participant".into()));
     }
+    // Membership is home-server authority (FR-51): remote servers request
+    // changes from the home server rather than editing replicas.
+    let home = meta.wave.split('/').next().unwrap_or_default().to_string();
+    if home != state.domain {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            format!("membership is managed by the wave's home server ({home})"),
+        ));
+    }
     let addr = added.to_string();
     if !meta.participants.contains(&addr) {
         meta.participants.push(addr);
         meta.last_activity_ms = now_ms();
+        meta.acl_version += 1;
         state.store.put_wave(&meta).await?;
         tracing::info!(wave = %meta.wave, participant = %added, by = %me, "participant added");
+        // Distribute the authoritative membership to peer servers.
+        crate::federation::spawn_announce(state.clone(), meta.clone());
     }
     Ok(Json(WaveDigest::new(meta, u64::MAX)))
 }

@@ -164,12 +164,23 @@ async fn handle_frame(
                 }
             };
             if let Some(sync_message::Kind::Update(update)) = msg.kind {
+                let bytes = update.update.clone();
                 match state
                     .engine
                     .apply_update(&sub.live, update.update, conn_id)
                     .await
                 {
-                    Ok(()) => None,
+                    Ok(()) => {
+                        // Locally-originated: fan out to federation peers
+                        // (FR-48). Remote-applied updates never take this
+                        // path, so there is no relay loop.
+                        crate::federation::spawn_push_update(
+                            state.clone(),
+                            sub.live.name.clone(),
+                            bytes,
+                        );
+                        None
+                    }
                     Err(EngineError::BadPayload(e)) => {
                         Some(error_frame(&msg.wavelet, "bad-update", &e))
                     }
@@ -229,6 +240,11 @@ async fn subscribe(
             return error_frame(&req.wavelet, "internal", "open failed");
         }
     };
+
+    // Remote-homed wave: freshen our replica via anti-entropy (FR-50).
+    if name.wave_id.domain() != state.domain {
+        crate::federation::spawn_sync_pull(state.clone(), name.clone());
+    }
 
     let (server_sv, diff) = match live.sync_state(&req.state_vector) {
         Ok(pair) => pair,
