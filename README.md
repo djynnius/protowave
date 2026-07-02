@@ -39,7 +39,17 @@ npm run build          # type-check + production build
 
 ## Status
 
-Phase 0 (foundations) — see PRD §12 for the roadmap.
+**Phase 1 (single-server collaboration)** — see PRD §12 for the roadmap.
+
+Working now: accounts (argon2id + sessions), wave creation and inbox,
+real-time collaborative editing (yrs/Yjs CRDTs over the protobuf WebSocket
+protocol), threaded blips, live collaborator cursors and presence, offline
+reconnect convergence, and durable file-backed persistence with periodic
+snapshots.
+
+Try it: run the server, then `npm run dev` in `web/`, open two browsers,
+register two accounts, create a wave, add the second account, and type in
+both windows.
 
 ## License
 

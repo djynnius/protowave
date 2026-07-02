@@ -30,20 +30,27 @@ pub mod v1 {
 
 #[cfg(test)]
 mod tests {
-    use super::v1::{AuthRequest, Channel, Envelope};
+    use super::v1::{control_message, Channel, ControlMessage, Envelope, Subscribe};
     use prost::Message;
 
     #[test]
     fn envelope_roundtrip() {
-        let auth = AuthRequest {
-            participant: "ada@example.org".into(),
-            token: "dev".into(),
+        let control = ControlMessage {
+            kind: Some(control_message::Kind::Subscribe(Subscribe {
+                wavelet: "example.org/w+1/conv+root".into(),
+                state_vector: vec![0],
+            })),
         };
-        let env = Envelope::control(&auth);
+        let env = Envelope::control(&control);
         let bytes = env.encode_frame();
         let back = Envelope::decode_frame(&bytes).unwrap();
         assert_eq!(back.channel, Channel::Control as i32);
-        let auth_back = AuthRequest::decode(back.payload.as_slice()).unwrap();
-        assert_eq!(auth_back.participant, "ada@example.org");
+        let control_back = ControlMessage::decode(back.payload.as_slice()).unwrap();
+        match control_back.kind {
+            Some(control_message::Kind::Subscribe(s)) => {
+                assert_eq!(s.wavelet, "example.org/w+1/conv+root");
+            }
+            other => panic!("unexpected kind: {other:?}"),
+        }
     }
 }

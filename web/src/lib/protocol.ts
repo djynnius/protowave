@@ -1,14 +1,16 @@
-// ProtoWave wire protocol (Phase 0): parses the canonical .proto schema at
-// runtime with protobufjs, so the schema in crates/protowave-proto stays the
-// single source of truth. Replaced by generated static code in Phase 1.
+// ProtoWave wire protocol: parses the canonical .proto schema at runtime
+// with protobufjs, so the schema in crates/protowave-proto stays the single
+// source of truth. Replaced by generated static code when the protocol
+// stabilizes.
 
 import protobuf from 'protobufjs'
 import envelopeProto from '../../../crates/protowave-proto/proto/protowave/v1/envelope.proto?raw'
 
 const root = protobuf.parse(envelopeProto).root
 const EnvelopeType = root.lookupType('protowave.v1.Envelope')
-const AuthRequestType = root.lookupType('protowave.v1.AuthRequest')
-const AuthResponseType = root.lookupType('protowave.v1.AuthResponse')
+const ControlType = root.lookupType('protowave.v1.ControlMessage')
+const SyncType = root.lookupType('protowave.v1.SyncMessage')
+const AwarenessType = root.lookupType('protowave.v1.AwarenessMessage')
 
 export const Channel = {
   CONTROL: 1,
@@ -24,13 +26,23 @@ export interface Envelope {
   payload: Uint8Array
 }
 
-export interface AuthResponse {
-  ok: boolean
-  sessionId: string
-  error: string
+export interface ControlIn {
+  subscribed?: { wavelet: string }
+  error?: { wavelet: string; code: string; message: string }
 }
 
-export function encodeEnvelope(channel: number, payload: Uint8Array): Uint8Array {
+export interface SyncIn {
+  wavelet: string
+  syncState?: { stateVector: Uint8Array; diff: Uint8Array }
+  update?: { update: Uint8Array }
+}
+
+export interface AwarenessIn {
+  wavelet: string
+  payload: Uint8Array
+}
+
+function envelope(channel: number, payload: Uint8Array): Uint8Array {
   return EnvelopeType.encode(EnvelopeType.create({ channel, payload })).finish()
 }
 
@@ -39,14 +51,36 @@ export function decodeEnvelope(bytes: Uint8Array): Envelope {
   return { channel: msg.channel, payload: msg.payload ?? new Uint8Array() }
 }
 
-export function encodeAuthRequest(participant: string, token: string): Uint8Array {
-  const payload = AuthRequestType.encode(AuthRequestType.create({ participant, token })).finish()
-  return encodeEnvelope(Channel.CONTROL, payload)
+export function encodeSubscribe(wavelet: string, stateVector: Uint8Array): Uint8Array {
+  const payload = ControlType.encode(
+    ControlType.create({ subscribe: { wavelet, stateVector } }),
+  ).finish()
+  return envelope(Channel.CONTROL, payload)
 }
 
-export function decodeAuthResponse(payload: Uint8Array): AuthResponse {
-  const msg = AuthResponseType.toObject(AuthResponseType.decode(payload), {
-    defaults: true,
-  }) as { ok: boolean; sessionId: string; error: string }
-  return msg
+export function encodeUnsubscribe(wavelet: string): Uint8Array {
+  const payload = ControlType.encode(ControlType.create({ unsubscribe: { wavelet } })).finish()
+  return envelope(Channel.CONTROL, payload)
+}
+
+export function encodeUpdate(wavelet: string, update: Uint8Array): Uint8Array {
+  const payload = SyncType.encode(SyncType.create({ wavelet, update: { update } })).finish()
+  return envelope(Channel.SYNC, payload)
+}
+
+export function encodeAwareness(wavelet: string, payload: Uint8Array): Uint8Array {
+  const body = AwarenessType.encode(AwarenessType.create({ wavelet, payload })).finish()
+  return envelope(Channel.AWARENESS, body)
+}
+
+export function decodeControl(payload: Uint8Array): ControlIn {
+  return ControlType.toObject(ControlType.decode(payload)) as ControlIn
+}
+
+export function decodeSync(payload: Uint8Array): SyncIn {
+  return SyncType.toObject(SyncType.decode(payload)) as SyncIn
+}
+
+export function decodeAwareness(payload: Uint8Array): AwarenessIn {
+  return AwarenessType.toObject(AwarenessType.decode(payload)) as AwarenessIn
 }
