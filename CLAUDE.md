@@ -32,6 +32,14 @@ budgets (NFR-Cx), architecture decisions (ADR-1..5), and the phase roadmap
   the **extension host** (`web/src/components/ExtensionFrame.vue`):
   sandboxed iframes + postMessage bridge to a collaborative Y.Map —
   Wave's gadget successor; sample app `web/public/extensions/tally.html`.
+- **Phase 7 (Hive Mind) shipped as exploratory** (`server/src/agent.rs`):
+  `InferenceProvider` trait + Gemini impl; agents author real blips into the
+  wavelet CRDT (yrs construction wire-compatible with web wavemodel.ts) via
+  POST /api/waves/ask; RAG over the asker's accessible waves + shared files
+  with provenance; signed federated inference `/federation/v0/infer`
+  (mixture-of-peers), model advertised in .well-known. FI-x not FR-x.
+  Constraints: no local GPU → provider stand-in (Gemini); R11 verification
+  unsolved (answers advisory). PROTOWAVE_INFER_MODEL overrides model.
 - Deferred: OIDC login (FR-3), in-text anchored inline replies (FR-19),
   participant *removal* + federated blob fetch for attachments, gRPC/TLS
   transport for federation.

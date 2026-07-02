@@ -57,6 +57,9 @@ const shares = ref<ShareMeta[]>([])
 const folderInput = ref<HTMLInputElement | null>(null)
 const sharingFolder = ref(false)
 const showPlayback = ref(false)
+const askPrompt = ref('')
+const asking = ref(false)
+const askModel = ref('')
 const translationLang = ref(localStorage.getItem('pw-lang') ?? '')
 const enableTranslationOpen = ref(false)
 
@@ -190,6 +193,22 @@ onBeforeUnmount(() => {
 
 function fragmentOf(id: string) {
   return blips(provider.doc).get(id)
+}
+
+async function askWave() {
+  const prompt = askPrompt.value.trim()
+  if (!prompt || asking.value) return
+  asking.value = true
+  try {
+    const res = await api.ask(waveId, prompt)
+    askModel.value = res.model
+    askPrompt.value = ''
+    // The answer arrives as an agent blip via the normal sync stream.
+  } catch (e) {
+    askModel.value = e instanceof Error ? e.message : 'the assistant is unavailable'
+  } finally {
+    asking.value = false
+  }
 }
 
 function reply(parent: string) {
@@ -409,6 +428,20 @@ async function uploadFile(event: Event) {
         />
       </div>
 
+      <form class="ask-bar" @submit.prevent="askWave">
+        <span class="ask-glyph" aria-hidden="true">✳</span>
+        <input
+          v-model="askPrompt"
+          class="text-input"
+          :placeholder="t('askPlaceholder')"
+          :disabled="asking"
+        />
+        <button class="btn btn-tide" :disabled="asking || !askPrompt.trim()">
+          {{ asking ? t('thinking') : t('askTheWave') }}
+        </button>
+      </form>
+      <p v-if="askModel" class="ask-model caption">{{ t('answeredBy', { model: askModel }) }}</p>
+
       <div class="thread">
         <BlipEditor
           v-for="node in thread"
@@ -560,6 +593,41 @@ async function uploadFile(event: Event) {
   grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
   gap: 0.8rem;
   margin-bottom: 1.4rem;
+}
+
+.ask-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  border: 1px solid var(--mist);
+  border-radius: 999px;
+  padding: 0.3rem 0.3rem 0.3rem 0.9rem;
+  background: #fff;
+  box-shadow: var(--shadow-card);
+  margin-bottom: 0.4rem;
+}
+
+.ask-bar .text-input {
+  border: none;
+  box-shadow: none;
+  flex: 1;
+  padding: 0.4rem 0;
+}
+
+.ask-bar .text-input:focus {
+  box-shadow: none;
+}
+
+.ask-glyph {
+  font-size: 1.1rem;
+  background: linear-gradient(135deg, var(--crest), var(--deep));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.ask-model {
+  margin: 0 0 1.4rem 1rem;
 }
 
 .thread {

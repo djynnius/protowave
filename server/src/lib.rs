@@ -2,6 +2,7 @@
 //! attachments, playback, and full-text search over the multiplexed
 //! WebSocket + REST protocol (PRD §7, §8.1).
 
+pub mod agent;
 pub mod api;
 pub mod attachments;
 pub mod auth;
@@ -38,6 +39,7 @@ pub struct AppState {
     pub search: Arc<dyn SearchIndex>,
     pub federation: Federation,
     pub translation: translate::TranslationHub,
+    pub inference: agent::InferenceHub,
     pub limits: limits::RateLimiter,
     /// This server's federation domain (PRD §8.2).
     pub domain: String,
@@ -64,6 +66,7 @@ impl AppState {
             search: Arc::new(TantivyIndex::open(&data_dir.join("search"))?),
             federation: Federation::new(fed_config, data_dir)?,
             translation: translate::TranslationHub::new(call_cap),
+            inference: agent::InferenceHub::default(),
             limits: limits::RateLimiter::default(),
             domain: domain.into(),
         });
@@ -74,7 +77,16 @@ impl AppState {
             tracing::info!(%model, "translation provider configured");
             state
                 .translation
-                .set_translator(Arc::new(translate::GeminiTranslator::new(key, model)));
+                .set_translator(Arc::new(translate::GeminiTranslator::new(
+                    key.clone(),
+                    model,
+                )));
+            // The same key powers the wave agent's inference (FI-6, §12.1).
+            let infer_model = std::env::var("PROTOWAVE_INFER_MODEL")
+                .unwrap_or_else(|_| "gemini-3.1-flash-lite".into());
+            state
+                .inference
+                .set(Arc::new(agent::GeminiInference::new(key, infer_model)));
         }
         spawn_search_indexer(state.clone());
         translate::spawn_translation_worker(state.clone());
@@ -154,6 +166,7 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route("/api/waves/participants", post(api::add_participant))
         .route("/api/waves/read", post(api::mark_read))
         .route("/api/waves/translation", post(api::set_translation))
+        .route("/api/waves/ask", post(agent::ask))
         .route("/api/admin/stats", get(limits::admin_stats))
         .route("/api/history", get(api::history))
         .route("/api/search", get(api::search))
@@ -175,6 +188,7 @@ pub fn app(state: Arc<AppState>) -> Router {
             post(shares::handle_share_announce),
         )
         .route(shares::BLOB_PATH, post(shares::handle_blob))
+        .route(federation::INFER_PATH, post(federation::handle_infer))
         // Folder uploads are large; per-handler checks enforce tighter caps.
         .layer(axum::extract::DefaultBodyLimit::max(
             shares::MAX_UPLOAD_BYTES,

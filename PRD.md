@@ -471,13 +471,24 @@ Every implementation of a hot path below must meet its Big-O budget; regressions
 | **4 — Translation** | §9 pipeline (FR-40..46), budgets, glossaries, overlay UI. | US-6 acceptance met across 3 language pairs within budget. |
 | **5 — P2P folder sharing** | §11 (FR-54..60), iroh integration, mirroring. | US-14..17 acceptance met including origin-offline fetch. |
 | **6 — Polish & extend** | PWA/offline hardening, i18n locales (NFR-20), rate limiting (FR-63), extension API (sandboxed iframes + postMessage — the gadget successor), admin tooling, HTML import (FR-17). | Public beta readiness. |
-| **7 — Federated inference ("Hive Mind")** *(future work, §12.1)* | Peer-hosted LLM sharing, agents as wave participants, RAG over federated shares. | Design-gated: verification problem (R11) has an accepted answer before implementation starts. |
+| **7 — Federated inference ("Hive Mind")** *(exploratory, implemented; §12.1)* | Agents as wave participants, RAG over accessible waves + shared files with provenance, signed federated inference (mixture-of-peers). | Shipped as exploratory: an agent answers as a blip grounded in wave context; a node can route inference to a peer's model. Constraints below. |
 
 **Ordering rationale:** federation lands before translation and P2P because it constrains protocol design the most — "core goal" means it cannot accrete late. Translation and P2P are the differentiators but depend on a stable collaborative core. Phase 7 depends on federation (Ph3), the `Translator`/provider abstraction (Ph4), P2P content addressing (Ph5), and the extension API (Ph6) all being stable.
 
-### 12.1 Phase 7 — Federated Inference & Agent Harness (future work)
+### 12.1 Phase 7 — Federated Inference & Agent Harness (exploratory, implemented)
 
-**Status: exploratory.** This section records design intent so earlier phases don't preclude it; nothing here is committed scope. Candidate requirements are labeled FI-x (not FR-x) to keep them out of v1 traceability.
+**Status: exploratory — a first implementation shipped.** Requirements remain labeled FI-x (not FR-x): this is beyond the committed v1 surface and its guarantees are weaker. What's built:
+
+- **Agent as participant (the harness).** `assistant@domain` reads a wave, assembles grounding context, and writes its answer as a real *blip* into the wavelet CRDT (`server/src/agent.rs`) — it persists, fans out to every subscriber, and federates like a human edit. Server-authored blips are constructed in yrs wire-compatibly with the web document model. Triggered by `POST /api/waves/ask` (the client's "✳ ask" bar); rate-limited (FI-2).
+- **RAG with provenance (FI-5).** Context = recent blips + full-text retrieval (tantivy) scoped strictly to the *asker's* accessible waves + the wave's shared-file listing. Retrieval never crosses the asker's ACLs.
+- **Federated inference (mixture-of-peers).** `POST /federation/v0/infer` (signed, participant-domain ACL) lets a wave's agent route to another node's model; each node advertises its model id in `.well-known/protowave` (FI-1). Provider is swappable behind `InferenceProvider` (FI-6).
+
+**Honest constraints (do not overstate this phase):**
+- These deployments have no GPU, so the "peer-hosted model" is each node's configured API provider (Gemini here), not a self-hosted local LLM. The federated-inference *protocol* is real and tested; dropping in llama.cpp-class local models is a provider change, not an architecture change.
+- **Answer verification (R11) remains unsolved.** Answers are advisory; the UI says "verify before relying on it." Redundant-sampling/attribution scaffolding is the only mitigation, and it is partial.
+- No agent autonomy loop, tool use, or multi-step planning — an agent answers when asked, once.
+
+Original design intent (still the north star) follows; candidate requirements are FI-x.
 
 **Concept.** Community members host small LLMs (e.g., Gemma-class, Qwen-Coder-class) on their own machines and share inference capacity across the federation — a *mixture of peers*, not merged weights: a router directs each task to a suitable node (code → code model, general → largest available), optionally sampling two nodes for comparison. Federated folder shares double as a RAG corpus with **cryptographic provenance**: every retrieved passage traces to a BLAKE3 hash in a signed manifest, so answers cite exactly which shared document a claim came from.
 

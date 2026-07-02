@@ -72,6 +72,10 @@ const en = {
   appUrl: 'App URL',
   appDisclosure:
     'Apps run in a sandboxed frame and share a small collaborative state with everyone on the wave. Only add apps you trust.',
+  askTheWave: '✳ ask',
+  askPlaceholder: 'Ask the assistant about this wave…',
+  thinking: 'thinking…',
+  answeredBy: 'answered by {model} · verify before relying on it',
 }
 
 const de: typeof en = {

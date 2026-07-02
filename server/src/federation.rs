@@ -401,7 +401,70 @@ pub async fn well_known(State(state): State<Arc<AppState>>) -> Json<serde_json::
         "publicUrl": state.federation.config.public_url,
         "publicKey": state.federation.public_key().to_hex(),
         "protocolVersion": PROTOCOL_VERSION,
+        // Advertised inference capability (FI-1) — null when this node hosts
+        // no model.
+        "inferenceModel": state.inference.model(),
     }))
+}
+
+pub const INFER_PATH: &str = "/federation/v0/infer";
+
+/// Fetch an inference from a peer node's model (FI, mixture-of-peers).
+pub async fn peer_infer(
+    state: &Arc<AppState>,
+    peer_domain: &str,
+    wave: &str,
+    prompt: &str,
+    context: &str,
+) -> io::Result<(String, String)> {
+    let req = pb::InferRequest {
+        wave: wave.to_string(),
+        prompt: prompt.to_string(),
+        context: context.to_string(),
+    }
+    .encode_to_vec();
+    let bytes = state
+        .federation
+        .post_signed(&state.domain, peer_domain, INFER_PATH, req)
+        .await?;
+    let res = pb::InferResponse::decode(bytes.as_slice()).map_err(other)?;
+    Ok((res.text, res.model))
+}
+
+/// Serve an inference to a peer whose domain participates in the wave
+/// (FI-4/5). Answers are advisory; verification (R11) is the caller's.
+pub async fn handle_infer(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Vec<u8>, ApiError> {
+    let peer = verify_peer(&state, &headers, INFER_PATH, &body).await?;
+    let req = pb::InferRequest::decode(body.as_ref())
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let meta = state
+        .store
+        .get_wave(&req.wave)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "unknown wave".into()))?;
+    if !domain_is_participant(&meta, &peer) {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "not a participant domain".into(),
+        ));
+    }
+    let provider = state
+        .inference
+        .get()
+        .ok_or_else(|| ApiError(StatusCode::SERVICE_UNAVAILABLE, "no model here".into()))?;
+    let text = provider
+        .infer(&req.prompt, &req.context)
+        .await
+        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("inference: {e}")))?;
+    Ok(pb::InferResponse {
+        text,
+        model: provider.model(),
+    }
+    .encode_to_vec())
 }
 
 pub async fn handle_push(

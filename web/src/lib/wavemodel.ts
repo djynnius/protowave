@@ -129,3 +129,8 @@ export function participantColor(participant: string): string {
 export function localPart(participant: string): string {
   return participant.split('@')[0] ?? participant
 }
+
+/// The wave agent (Hive Mind harness) authors blips as `assistant@domain`.
+export function isAgent(participant: string): boolean {
+  return localPart(participant) === 'assistant'
+}

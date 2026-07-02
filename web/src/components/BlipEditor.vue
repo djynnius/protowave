@@ -10,7 +10,8 @@ import CollaborationCursor from '@tiptap/extension-collaboration-cursor'
 import type * as Y from 'yjs'
 import type { WaveletProvider } from '../lib/provider'
 import { useI18n } from 'vue-i18n'
-import { localPart, participantColor, type BlipEntry } from '../lib/wavemodel'
+import { computed } from 'vue'
+import { isAgent, localPart, participantColor, type BlipEntry } from '../lib/wavemodel'
 
 const { t } = useI18n()
 
@@ -22,6 +23,8 @@ const props = defineProps<{
   depth: number
   translation?: string
 }>()
+
+const agent = computed(() => isAgent(props.entry.author))
 
 const emit = defineEmits<{ reply: [parent: string] }>()
 
@@ -45,17 +48,19 @@ function timeOf(ts: number): string {
 </script>
 
 <template>
-  <article class="blip" :style="{ '--depth': depth }">
+  <article class="blip" :class="{ agent }" :style="{ '--depth': depth }">
     <span
       class="avatar"
-      :style="{ background: participantColor(entry.author) }"
+      :class="{ 'avatar-agent': agent }"
+      :style="agent ? undefined : { background: participantColor(entry.author) }"
       :title="entry.author"
     >
-      {{ localPart(entry.author).slice(0, 1).toUpperCase() }}
+      {{ agent ? '✳' : localPart(entry.author).slice(0, 1).toUpperCase() }}
     </span>
     <div class="body">
       <header class="byline">
         <span class="author">{{ localPart(entry.author) }}</span>
+        <span v-if="agent" class="tag tag-agent">assistant</span>
         <time class="caption">{{ timeOf(entry.ts) }}</time>
       </header>
       <EditorContent :editor="editor" class="blip-editor" />
@@ -69,6 +74,28 @@ function timeOf(ts: number): string {
 </template>
 
 <style scoped>
+.blip.agent {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--crest-t) 55%, transparent), transparent 70%);
+  border-radius: 12px;
+  padding-left: 0.5rem;
+}
+
+.avatar-agent {
+  background: linear-gradient(135deg, var(--crest), var(--deep));
+}
+
+.tag-agent {
+  background: var(--crest-t);
+  color: #0f9d8a;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+}
+
 .blip {
   display: flex;
   gap: 0.75rem;

@@ -86,6 +86,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ wave, participant }),
     }),
+  ask: (wave: string, prompt: string) =>
+    request<{ answer: string; model: string; agent: string }>('/api/waves/ask', {
+      method: 'POST',
+      body: JSON.stringify({ wave, prompt }),
+    }),
   setTranslation: (wave: string, enabled: boolean) =>
     request<WaveDigest>('/api/waves/translation', {
       method: 'POST',

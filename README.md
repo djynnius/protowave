@@ -39,6 +39,15 @@ npm run build          # type-check + production build
 
 ## Status
 
+**Phase 7 (Hive Mind — exploratory).** Waves have an assistant: ✳ ask it
+about the wave and it answers as a real message (a blip), grounded in the
+conversation, your accessible waves (full-text retrieval), and the wave's
+shared files — with sources. The answer persists, streams to everyone, and
+federates like any edit. A node can even route inference to a *peer's*
+model over the signed federation channel (mixture-of-peers). Honest limits:
+no local GPU here, so the model is each node's configured provider (Gemini);
+answers are advisory — verification stays an open problem (PRD §12.1, R11).
+
 **Phase 6 (Public beta readiness) — the PRD's v1 roadmap is complete.**
 ProtoWave is now an installable PWA with an offline shell, localized into
 seven languages (en/de/es/fr/ru/zh-TW/sl), rate-limited against abuse, and

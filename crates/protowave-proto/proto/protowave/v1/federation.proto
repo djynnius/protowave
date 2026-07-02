@@ -106,3 +106,22 @@ message BlobRequest {
   string hash = 1;
   string wave = 2;
 }
+
+// ---- federated inference (PRD §12.1, Hive Mind — exploratory) ----
+//
+// POST /federation/v0/infer — a peer server asks THIS server's model to
+// answer, scoped to a wave the requesting domain participates in (FI-4/5).
+// "Mixture of peers": a wave's agent can route to whichever node hosts a
+// suitable model. Answers are advisory; verification (R11) is unsolved —
+// callers may cross-check with redundant samples.
+message InferRequest {
+  string wave = 1;
+  string prompt = 2;
+  string context = 3;
+}
+
+message InferResponse {
+  string text = 1;
+  // The responding server's advertised model id (provenance, FI-1).
+  string model = 2;
+}
