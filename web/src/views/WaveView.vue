@@ -24,7 +24,7 @@ import {
   threadOrder,
   type BlipEntry,
 } from '../lib/wavemodel'
-import TideLine from '../components/TideLine.vue'
+import WaveMesh from '../components/WaveMesh.vue'
 import BlipEditor from '../components/BlipEditor.vue'
 import AttachmentCard from '../components/AttachmentCard.vue'
 import PlaybackDrawer from '../components/PlaybackDrawer.vue'
@@ -271,7 +271,7 @@ async function uploadFile(event: Event) {
           {{ localPart(p) }}&nbsp;
         </span>
       </p>
-      <TideLine class="rule" :active="!provider.synced.value" />
+      <WaveMesh class="rule" :active="!provider.synced.value" />
       <p v-if="provider.error.value" class="error-note">{{ provider.error.value }}</p>
 
       <aside v-if="showDocuments" class="documents">

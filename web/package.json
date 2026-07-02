@@ -9,7 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/archivo": "^5.2.8",
     "@fontsource/fraunces": "^5.2.9",
+    "@fontsource/hanken-grotesk": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
     "@fontsource/newsreader": "^5.2.10",
     "@fontsource/spline-sans-mono": "^5.2.8",
     "@tiptap/extension-collaboration": "^2.27.2",

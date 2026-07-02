@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useSession } from '../stores/session'
 import { ApiError } from '../lib/api'
-import TideLine from '../components/TideLine.vue'
+import WaveMesh from '../components/WaveMesh.vue'
 
 const session = useSession()
 const router = useRouter()
@@ -27,7 +27,7 @@ async function submit() {
     }
     router.push((route.query.next as string) ?? '/')
   } catch (e) {
-    error.value = e instanceof ApiError ? e.message : 'something went adrift — try again'
+    error.value = e instanceof ApiError ? e.message : 'something went wrong — try again'
   } finally {
     busy.value = false
   }
@@ -36,12 +36,10 @@ async function submit() {
 
 <template>
   <main class="shore">
-    <div class="swell" aria-hidden="true">~</div>
-
     <section class="card reveal">
-      <h1 class="wordmark">protowave</h1>
-      <p class="tagline">a document that is a conversation</p>
-      <TideLine class="rule" :active="busy" />
+      <WaveMesh variant="mark" class="mark" :active="busy" :width="320" />
+      <h1 class="wordmark brand">Proto<em>Wave</em></h1>
+      <p class="tagline">Collaboration without boundaries.</p>
 
       <div class="mode-switch" role="tablist">
         <button
@@ -50,7 +48,7 @@ async function submit() {
           :class="{ on: mode === 'login' }"
           @click="mode = 'login'"
         >
-          sign in
+          Sign in
         </button>
         <button
           role="tab"
@@ -58,13 +56,13 @@ async function submit() {
           :class="{ on: mode === 'register' }"
           @click="mode = 'register'"
         >
-          come aboard
+          Create account
         </button>
       </div>
 
       <form @submit.prevent="submit">
         <label class="field">
-          <span class="field-label">name</span>
+          <span class="field-label">Name</span>
           <input
             v-model.trim="name"
             class="text-input"
@@ -74,7 +72,7 @@ async function submit() {
           />
         </label>
         <label class="field">
-          <span class="field-label">passphrase</span>
+          <span class="field-label">Passphrase</span>
           <input
             v-model="password"
             class="text-input"
@@ -85,9 +83,11 @@ async function submit() {
         </label>
         <p v-if="error" class="error-note">{{ error }}</p>
         <button class="btn btn-tide submit" :disabled="busy">
-          {{ mode === 'login' ? 'set sail' : 'register & set sail' }}
+          {{ mode === 'login' ? 'Start a wave' : 'Create account & dive in' }}
         </button>
       </form>
+
+      <p class="caption footer-caption">Apache-2.0 · Self-hostable · Federated</p>
     </section>
   </main>
 </template>
@@ -98,76 +98,76 @@ async function submit() {
   display: grid;
   place-items: center;
   padding: 2rem 1rem;
-  position: relative;
-  overflow: hidden;
-}
-
-/* A giant, faint tilde looming behind the card — the wave itself. */
-.swell {
-  position: absolute;
-  font-family: var(--font-display);
-  font-weight: 900;
-  font-size: min(70vw, 44rem);
-  line-height: 0.6;
-  color: transparent;
-  -webkit-text-stroke: 1.5px rgba(14, 124, 107, 0.14);
-  transform: rotate(-8deg) translateY(-4%);
-  user-select: none;
-  pointer-events: none;
 }
 
 .card {
-  position: relative;
-  width: min(23rem, 92vw);
-  background: color-mix(in srgb, var(--paper) 65%, #fff);
-  border: 1px solid var(--paper-edge);
-  border-radius: 10px;
+  width: min(24rem, 92vw);
+  background: #fff;
+  border: 1px solid var(--mist);
+  border-radius: var(--radius-card);
   box-shadow: var(--shadow-raise);
-  padding: 2.2rem 2rem 2rem;
+  padding: 2.4rem 2.2rem 1.8rem;
+  text-align: center;
 }
 
-.wordmark {
-  font-size: 2.6rem;
-  font-weight: 900;
-  letter-spacing: -0.02em;
+.mark {
+  width: 9.5rem;
+  margin: 0 auto 1.1rem;
+}
+
+.brand {
+  font-size: 2.1rem;
 }
 
 .tagline {
-  font-style: italic;
-  color: var(--ink-soft);
-  margin: 0.2rem 0 0.9rem;
-}
-
-.rule {
-  margin-bottom: 1.4rem;
+  color: var(--slate);
+  margin: 0.35rem 0 1.4rem;
+  font-weight: 500;
 }
 
 .mode-switch {
-  display: flex;
-  gap: 0.4rem;
-  margin-bottom: 1.2rem;
+  display: inline-flex;
+  gap: 0.25rem;
+  background: var(--sky-t);
+  border-radius: var(--radius-pill);
+  padding: 0.25rem;
+  margin-bottom: 1.4rem;
 }
 
 .mode-switch button {
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  letter-spacing: 0.05em;
-  color: var(--ink-soft);
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--slate);
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
-  padding: 0.25rem 0.1rem;
+  border-radius: var(--radius-pill);
+  padding: 0.4rem 1rem;
   cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .mode-switch button.on {
-  color: var(--tide-deep);
-  border-bottom-color: var(--tide);
+  background: #fff;
+  color: var(--deep);
+  box-shadow: var(--shadow-card);
+}
+
+form {
+  text-align: left;
 }
 
 .submit {
   width: 100%;
   justify-content: center;
   margin-top: 0.4rem;
+  padding: 0.7rem 1rem;
+  font-size: 0.92rem;
+}
+
+.footer-caption {
+  margin-top: 1.6rem;
 }
 </style>

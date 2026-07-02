@@ -6,7 +6,7 @@ import { computed, ref, watch } from 'vue'
 import * as Y from 'yjs'
 import { sanitizeFragmentXml } from '../lib/markdown'
 import { threadOrder, type BlipEntry } from '../lib/wavemodel'
-import TideLine from './TideLine.vue'
+import WaveMesh from './WaveMesh.vue'
 
 const props = defineProps<{ wavelet: string }>()
 const emit = defineEmits<{ close: [] }>()
@@ -84,7 +84,7 @@ load()
       <h3>replay the wave</h3>
       <button class="btn" @click="emit('close')">close</button>
     </header>
-    <TideLine :active="loading" />
+    <WaveMesh :active="loading" :width="400" />
     <p v-if="error" class="error-note">{{ error }}</p>
 
     <div class="scrubber">

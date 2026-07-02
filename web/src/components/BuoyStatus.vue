@@ -49,18 +49,18 @@ const label = computed(
 }
 
 .buoy[data-status='online'] .dot {
-  background: var(--tide);
+  background: var(--crest);
   animation:
     bob 2.4s ease-in-out infinite,
     ripple 2.4s ease-out infinite;
 }
 
 .buoy[data-status='connecting'] .dot {
-  background: var(--gold);
+  background: var(--dusk);
   animation: bob 1s ease-in-out infinite;
 }
 
 .buoy[data-status='offline'] .dot {
-  background: var(--coral);
+  background: #f43f5e;
 }
 </style>

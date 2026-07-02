@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// One blip: a Tiptap editor bound to the blip's Y.XmlFragment, with the
-// author/time in the manuscript margin and live collaborator carets.
+// One blip, styled after the Brand v2 conversation card: colored avatar
+// circle, name + time caption, message body, and (when reading in another
+// language) the Dusk "translated" overlay chip.
 import { onBeforeUnmount } from 'vue'
 import { Editor, EditorContent } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
@@ -42,116 +43,110 @@ function timeOf(ts: number): string {
 
 <template>
   <article class="blip" :style="{ '--depth': depth }">
-    <div class="margin mono">
-      <span class="author" :style="{ color: participantColor(entry.author) }">
-        {{ localPart(entry.author) }}
-      </span>
-      <time>{{ timeOf(entry.ts) }}</time>
-    </div>
+    <span
+      class="avatar"
+      :style="{ background: participantColor(entry.author) }"
+      :title="entry.author"
+    >
+      {{ localPart(entry.author).slice(0, 1).toUpperCase() }}
+    </span>
     <div class="body">
+      <header class="byline">
+        <span class="author">{{ localPart(entry.author) }}</span>
+        <time class="caption">{{ timeOf(entry.ts) }}</time>
+      </header>
       <EditorContent :editor="editor" class="blip-editor" />
-      <p v-if="translation" class="translation">
-        <span class="tilde" aria-hidden="true">≈</span>{{ translation }}
-      </p>
-      <button class="reply mono" @click="emit('reply', entry.id)">↳ reply</button>
+      <div v-if="translation" class="translation">
+        <span class="tag tag-dusk">✓ translated</span>
+        <p>{{ translation }}</p>
+      </div>
+      <button class="reply" @click="emit('reply', entry.id)">↳ Reply</button>
     </div>
   </article>
 </template>
 
 <style scoped>
 .blip {
-  display: grid;
-  grid-template-columns: 6.5rem 1fr;
-  gap: 1rem;
-  margin-left: calc(var(--depth) * 1.6rem);
-  padding: 0.7rem 0;
+  display: flex;
+  gap: 0.75rem;
+  margin-left: calc(var(--depth) * 1.7rem);
+  padding: 0.85rem 0;
   border-bottom: 1px solid var(--hairline-soft);
   position: relative;
 }
 
 /* Thread tie-line for replies. */
-.blip[style*='--depth: 0'] {
-  margin-left: 0;
-}
-
 .blip:not([style*='--depth: 0'])::before {
   content: '';
   position: absolute;
-  left: -0.9rem;
+  left: -0.95rem;
   top: 0;
   bottom: 0;
-  border-left: 1px solid var(--hairline);
+  border-left: 2px solid var(--sky-t);
 }
 
-.margin {
-  text-align: right;
-  padding-top: 0.15rem;
-  font-size: 0.68rem;
-  letter-spacing: 0.04em;
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
+.avatar {
+  flex: none;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  font-weight: 700;
   user-select: none;
-}
-
-.author {
-  font-weight: 500;
-}
-
-time {
-  color: var(--ink-faint);
+  box-shadow: 0 2px 6px rgba(11, 27, 43, 0.15);
 }
 
 .body {
-  position: relative;
   min-width: 0;
+  flex: 1;
+}
+
+.byline {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.15rem;
+}
+
+.author {
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--ink);
 }
 
 /* Translation overlay: derived, never the document itself (PRD §9). */
 .translation {
-  margin: 0.3rem 0 0;
-  padding: 0.35rem 0.6rem;
-  background: var(--tide-wash);
-  border-left: 2px solid var(--tide);
-  border-radius: 0 4px 4px 0;
-  font-style: italic;
-  color: var(--tide-deep);
-  font-size: 0.95rem;
+  margin-top: 0.4rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--dusk-t);
+  border-radius: 10px;
 }
 
-.tilde {
-  font-family: var(--font-mono);
-  margin-right: 0.4rem;
-  opacity: 0.6;
+.translation p {
+  margin: 0.3rem 0 0;
+  color: #4c53b8;
+  font-size: 0.92rem;
 }
 
 .reply {
   opacity: 0;
   background: none;
   border: none;
-  color: var(--tide-deep);
-  font-size: 0.68rem;
-  letter-spacing: 0.05em;
+  color: var(--deep);
+  font-family: var(--font-body);
+  font-size: 0.76rem;
+  font-weight: 600;
   cursor: pointer;
-  padding: 0.2rem 0;
+  padding: 0.3rem 0;
   transition: opacity 0.15s ease;
 }
 
 .blip:hover .reply,
 .blip:focus-within .reply {
   opacity: 1;
-}
-
-@media (max-width: 640px) {
-  .blip {
-    grid-template-columns: 1fr;
-    gap: 0.2rem;
-  }
-
-  .margin {
-    flex-direction: row;
-    gap: 0.6rem;
-    text-align: left;
-  }
 }
 </style>

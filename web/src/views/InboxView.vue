@@ -14,7 +14,7 @@ import { useSession } from '../stores/session'
 import { useWaves } from '../stores/waves'
 import { api, type SearchHit } from '../lib/api'
 import { localPart } from '../lib/wavemodel'
-import TideLine from '../components/TideLine.vue'
+import WaveMesh from '../components/WaveMesh.vue'
 
 const session = useSession()
 const waves = useWaves()
@@ -82,8 +82,8 @@ function relative(ms: number): string {
   <main class="harbor">
     <header class="masthead reveal">
       <div>
-        <h1 class="wordmark">protowave</h1>
-        <TideLine class="rule" :active="searching" />
+        <h1 class="wordmark">Proto<em>Wave</em></h1>
+        <WaveMesh class="rule" :active="searching" :width="240" />
       </div>
       <div class="helm">
         <span class="addr"
@@ -271,10 +271,10 @@ function relative(ms: number): string {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  background: color-mix(in srgb, var(--paper) 55%, #fff);
+  background: #fff;
   border: 1px solid var(--paper-edge);
-  border-left: 3px solid var(--tide);
-  border-radius: 6px;
+  border-left: 3px solid var(--deep);
+  border-radius: 14px;
   padding: 0.9rem 1.1rem;
   cursor: pointer;
   transition:

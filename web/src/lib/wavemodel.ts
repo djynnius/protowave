@@ -74,8 +74,9 @@ export function threadOrder(entries: BlipEntry[]): BlipNode[] {
   return out
 }
 
-/// Deterministic collaborator color from a participant address.
-const PALETTE = ['#E2603F', '#0E7C6B', '#C9A227', '#7D4A8E', '#3F6C8C', '#A34D68']
+/// Deterministic collaborator color from a participant address —
+/// brand blues (crest → dusk) plus deep accents so avatars sit in harmony.
+const PALETTE = ['#2E6BF0', '#2DD4BF', '#818CF8', '#38BDF8', '#0F9D8A', '#5B63D6']
 
 export function participantColor(participant: string): string {
   let hash = 0
