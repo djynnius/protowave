@@ -13,7 +13,7 @@ import {
 import { socket, WaveletProvider } from '../lib/provider'
 import { useSession } from '../stores/session'
 import { useWaves } from '../stores/waves'
-import { api, type AttachmentMeta } from '../lib/api'
+import { api, type AttachmentMeta, type ShareMeta } from '../lib/api'
 import {
   addReply,
   blips,
@@ -27,6 +27,7 @@ import {
 import WaveMesh from '../components/WaveMesh.vue'
 import BlipEditor from '../components/BlipEditor.vue'
 import AttachmentCard from '../components/AttachmentCard.vue'
+import FolderShareCard from '../components/FolderShareCard.vue'
 import PlaybackDrawer from '../components/PlaybackDrawer.vue'
 
 const route = useRoute()
@@ -43,6 +44,9 @@ const provider = new WaveletProvider(socket, rootWavelet)
 const entries = shallowRef<BlipEntry[]>([])
 const presence = ref<{ name: string; color: string }[]>([])
 const attachments = ref<AttachmentMeta[]>([])
+const shares = ref<ShareMeta[]>([])
+const folderInput = ref<HTMLInputElement | null>(null)
+const sharingFolder = ref(false)
 const showPlayback = ref(false)
 const translationLang = ref(localStorage.getItem('pw-lang') ?? '')
 const enableTranslationOpen = ref(false)
@@ -107,6 +111,33 @@ async function refreshAttachments() {
   } catch {
     attachments.value = []
   }
+  try {
+    shares.value = await api.listShares(waveId)
+  } catch {
+    shares.value = []
+  }
+}
+
+async function shareFolder(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = [...(input.files ?? [])]
+  if (files.length === 0) return
+  const first = files[0] as File & { webkitRelativePath?: string }
+  const folderName = first.webkitRelativePath?.split('/')[0] || 'shared-folder'
+  sharingFolder.value = true
+  try {
+    await api.uploadFolder(waveId, folderName, files)
+    await refreshAttachments()
+    showDocuments.value = true
+  } finally {
+    sharingFolder.value = false
+    input.value = ''
+  }
+}
+
+function onShareMirrored(updated: ShareMeta) {
+  const i = shares.value.findIndex((s) => s.manifest_hash === updated.manifest_hash)
+  if (i >= 0) shares.value[i] = updated
 }
 
 onMounted(async () => {
@@ -277,12 +308,36 @@ async function uploadFile(event: Event) {
       <aside v-if="showDocuments" class="documents">
         <div class="documents-head">
           <h2>shared files</h2>
-          <label class="btn" :aria-busy="uploading">
-            {{ uploading ? 'hauling aboard…' : '+ share a file' }}
-            <input ref="fileInput" type="file" hidden :disabled="uploading" @change="uploadFile" />
-          </label>
+          <span class="doc-actions">
+            <label class="btn" :aria-busy="uploading">
+              {{ uploading ? 'uploading…' : '+ file' }}
+              <input ref="fileInput" type="file" hidden :disabled="uploading" @change="uploadFile" />
+            </label>
+            <label class="btn" :aria-busy="sharingFolder">
+              {{ sharingFolder ? 'chunking…' : '▤ share a folder' }}
+              <input
+                ref="folderInput"
+                type="file"
+                webkitdirectory
+                multiple
+                hidden
+                :disabled="sharingFolder"
+                @change="shareFolder"
+              />
+            </label>
+          </span>
         </div>
-        <p v-if="attachments.length === 0" class="mono no-files">nothing shared yet</p>
+        <p v-if="attachments.length === 0 && shares.length === 0" class="mono no-files">
+          nothing shared yet
+        </p>
+        <div v-if="shares.length" class="documents-grid shares-grid">
+          <FolderShareCard
+            v-for="s in shares"
+            :key="s.manifest_hash"
+            :share="s"
+            @mirrored="onShareMirrored"
+          />
+        </div>
         <div class="documents-grid">
           <AttachmentCard
             v-for="a in attachments"
@@ -425,6 +480,15 @@ async function uploadFile(event: Event) {
 .no-files {
   font-size: 0.72rem;
   color: var(--ink-faint);
+}
+
+.doc-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.shares-grid {
+  margin-bottom: 0.6rem;
 }
 
 .documents-grid {

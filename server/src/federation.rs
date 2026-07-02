@@ -351,6 +351,35 @@ async fn verify_peer(
     Ok(domain)
 }
 
+/// Public wrapper so other modules (shares) can authenticate s2s requests.
+pub async fn verify_peer_public(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    path: &str,
+    body: &[u8],
+) -> Result<String, ApiError> {
+    verify_peer(state, headers, path, body).await
+}
+
+/// Fetch a CAS blob (chunk/manifest) from a peer over the signed channel.
+/// The caller verifies the returned bytes against the requested hash.
+pub async fn fetch_blob(
+    state: &Arc<AppState>,
+    peer_domain: &str,
+    hash: &str,
+    wave: &str,
+) -> io::Result<Vec<u8>> {
+    let req = pb::BlobRequest {
+        hash: hash.to_string(),
+        wave: wave.to_string(),
+    }
+    .encode_to_vec();
+    state
+        .federation
+        .post_signed(&state.domain, peer_domain, crate::shares::BLOB_PATH, req)
+        .await
+}
+
 fn domain_is_participant(meta: &WaveMeta, domain: &str) -> bool {
     meta.participants
         .iter()

@@ -65,3 +65,44 @@ message FedAck {
   bool ok = 1;
   string error = 2;
 }
+
+// ---- distributed folder sharing (PRD §11, FR-54..59) ----
+
+// A shared folder: content-defined chunks (FastCDC) in the BLAKE3 CAS.
+// The manifest itself is stored in the CAS; its hash is the share id and
+// the read capability (NFR-18) — fetch-by-hash is self-verifying.
+message FolderManifest {
+  string name = 1;
+  repeated FileEntry files = 2;
+  uint64 total_size = 3;
+  uint64 created_ms = 4;
+}
+
+message FileEntry {
+  // Relative path within the folder, '/'-separated.
+  string path = 1;
+  uint64 size = 2;
+  string mime = 3;
+  // BLAKE3 hex of each chunk, in order.
+  repeated string chunks = 4;
+}
+
+// POST /federation/v0/share-announce — origin server tells wave peers a
+// share exists so it appears in their members' file panels (FR-55).
+message ShareAnnouncement {
+  string wave = 1;
+  string manifest_hash = 2;
+  string name = 3;
+  uint64 total_size = 4;
+  uint32 file_count = 5;
+  string uploader = 6;
+  uint64 created_ms = 7;
+}
+
+// POST /federation/v0/blob — fetch a CAS blob (chunk or manifest) by hash.
+// The response body is the raw bytes; the requester verifies BLAKE3 before
+// accepting (FR-56, NFR-C9). `wave` scopes the ACL check.
+message BlobRequest {
+  string hash = 1;
+  string wave = 2;
+}

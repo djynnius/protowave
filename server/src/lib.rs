@@ -9,6 +9,7 @@ pub mod cas;
 pub mod engine;
 pub mod federation;
 pub mod search;
+pub mod shares;
 pub mod store;
 pub mod store_pg;
 pub mod translate;
@@ -157,10 +158,23 @@ pub fn app(state: Arc<AppState>) -> Router {
             get(attachments::list).post(attachments::upload),
         )
         .route("/api/attachments/:hash", get(attachments::download))
+        .route("/api/shares", get(shares::list).post(shares::upload))
+        .route("/api/shares/:hash", get(shares::manifest))
+        .route("/api/shares/:hash/file", get(shares::download))
+        .route("/api/shares/:hash/mirror", post(shares::mirror))
         .route("/.well-known/protowave", get(federation::well_known))
         .route(federation::PUSH_PATH, post(federation::handle_push))
         .route(federation::SYNC_PATH, post(federation::handle_sync))
         .route(federation::ANNOUNCE_PATH, post(federation::handle_announce))
+        .route(
+            shares::SHARE_ANNOUNCE_PATH,
+            post(shares::handle_share_announce),
+        )
+        .route(shares::BLOB_PATH, post(shares::handle_blob))
+        // Folder uploads are large; per-handler checks enforce tighter caps.
+        .layer(axum::extract::DefaultBodyLimit::max(
+            shares::MAX_UPLOAD_BYTES,
+        ))
         .with_state(state);
 
     // Single-binary deploy (G11): serve the built SPA when present, with

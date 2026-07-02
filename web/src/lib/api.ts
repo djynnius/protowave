@@ -26,6 +26,23 @@ export interface SearchHit {
   snippet: string
 }
 
+export interface ShareMeta {
+  manifest_hash: string
+  wave: string
+  name: string
+  total_size: number
+  file_count: number
+  uploader: string
+  origin_domain: string
+  mirrored: boolean
+}
+
+export interface ShareManifest {
+  name: string
+  totalSize: number
+  files: { path: string; size: number; mime: string; chunks: number }[]
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -82,6 +99,25 @@ export const api = {
   search: (q: string) => request<SearchHit[]>(`/api/search?q=${encodeURIComponent(q)}`),
   listAttachments: (wave: string) =>
     request<AttachmentMeta[]>(`/api/attachments?wave=${encodeURIComponent(wave)}`),
+  listShares: (wave: string) =>
+    request<ShareMeta[]>(`/api/shares?wave=${encodeURIComponent(wave)}`),
+  shareManifest: (hash: string) => request<ShareManifest>(`/api/shares/${hash}`),
+  mirrorShare: (hash: string) =>
+    request<ShareMeta>(`/api/shares/${hash}/mirror`, { method: 'POST' }),
+  uploadFolder: async (wave: string, name: string, files: File[]): Promise<ShareMeta> => {
+    const form = new FormData()
+    for (const file of files) {
+      const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+      form.append('file', file, rel)
+    }
+    const res = await fetch(
+      `/api/shares?wave=${encodeURIComponent(wave)}&name=${encodeURIComponent(name)}`,
+      { method: 'POST', credentials: 'same-origin', body: form },
+    )
+    const body = await res.json().catch(() => null)
+    if (!res.ok) throw new ApiError(res.status, body?.error ?? res.statusText)
+    return body as ShareMeta
+  },
   uploadAttachment: async (wave: string, file: File): Promise<AttachmentMeta> => {
     const form = new FormData()
     form.append('file', file, file.name)

@@ -66,6 +66,23 @@ pub struct AttachmentMeta {
     pub created_ms: u64,
 }
 
+/// A shared folder (PRD §11): the manifest lives in the CAS under
+/// `manifest_hash`; this record makes it discoverable on the wave.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShareMeta {
+    pub manifest_hash: String,
+    pub wave: String,
+    pub name: String,
+    pub total_size: u64,
+    pub file_count: u32,
+    pub uploader: String,
+    /// Domain holding the original full copy (chunk fetch starts here).
+    pub origin_domain: String,
+    /// True when this server has pinned every chunk locally (FR-58).
+    pub mirrored: bool,
+    pub created_ms: u64,
+}
+
 /// A wavelet's persisted state: latest snapshot (if any) plus the update
 /// log tail not yet covered by it. Open cost is O(snapshot) + O(tail)
 /// (NFR-C3); the log itself is never truncated (NFR-9).
@@ -123,6 +140,11 @@ pub trait WaveStore: Send + Sync + 'static {
     // Pinned federation peer keys, TOFU (NFR-15).
     async fn put_peer_key(&self, domain: &str, public_key_hex: &str) -> io::Result<()>;
     async fn get_peer_key(&self, domain: &str) -> io::Result<Option<String>>;
+
+    // Folder shares (FR-54..58).
+    async fn put_share(&self, meta: &ShareMeta) -> io::Result<()>;
+    async fn get_share(&self, manifest_hash: &str) -> io::Result<Option<ShareMeta>>;
+    async fn list_shares(&self, wave: &str) -> io::Result<Vec<ShareMeta>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +162,8 @@ struct Tables {
     attachments: HashMap<String, AttachmentMeta>,
     #[serde(default)]
     peer_keys: HashMap<String, String>,
+    #[serde(default)]
+    shares: HashMap<String, ShareMeta>,
 }
 
 pub struct FileStore {
@@ -411,6 +435,31 @@ impl WaveStore for FileStore {
     async fn get_peer_key(&self, domain: &str) -> io::Result<Option<String>> {
         let tables = self.tables.lock().unwrap();
         Ok(tables.peer_keys.get(domain).cloned())
+    }
+
+    async fn put_share(&self, meta: &ShareMeta) -> io::Result<()> {
+        let mut tables = self.tables.lock().unwrap();
+        tables
+            .shares
+            .insert(meta.manifest_hash.clone(), meta.clone());
+        self.flush_tables(&tables)
+    }
+
+    async fn get_share(&self, manifest_hash: &str) -> io::Result<Option<ShareMeta>> {
+        let tables = self.tables.lock().unwrap();
+        Ok(tables.shares.get(manifest_hash).cloned())
+    }
+
+    async fn list_shares(&self, wave: &str) -> io::Result<Vec<ShareMeta>> {
+        let tables = self.tables.lock().unwrap();
+        let mut out: Vec<ShareMeta> = tables
+            .shares
+            .values()
+            .filter(|s| s.wave == wave)
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| b.created_ms.cmp(&a.created_ms));
+        Ok(out)
     }
 }
 

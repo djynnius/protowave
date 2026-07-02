@@ -13,7 +13,7 @@ use tokio_postgres::NoTls;
 
 use protowave_core::{ParticipantId, WaveletName};
 
-use crate::store::{Account, AttachmentMeta, WaveMeta, WaveStore, WaveletRecord};
+use crate::store::{Account, AttachmentMeta, ShareMeta, WaveMeta, WaveStore, WaveletRecord};
 
 fn db_err(e: impl std::fmt::Display) -> io::Error {
     io::Error::new(io::ErrorKind::Other, format!("postgres: {e}"))
@@ -71,7 +71,33 @@ CREATE TABLE IF NOT EXISTS peer_keys (
     domain TEXT PRIMARY KEY,
     public_key TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS shares (
+    manifest_hash TEXT PRIMARY KEY,
+    wave TEXT NOT NULL,
+    name TEXT NOT NULL,
+    total_size BIGINT NOT NULL,
+    file_count BIGINT NOT NULL,
+    uploader TEXT NOT NULL,
+    origin_domain TEXT NOT NULL,
+    mirrored BOOLEAN NOT NULL,
+    created_ms BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS shares_wave ON shares (wave);
 ";
+
+fn row_to_share(row: &tokio_postgres::Row) -> ShareMeta {
+    ShareMeta {
+        manifest_hash: row.get("manifest_hash"),
+        wave: row.get("wave"),
+        name: row.get("name"),
+        total_size: row.get::<_, i64>("total_size") as u64,
+        file_count: row.get::<_, i64>("file_count") as u32,
+        uploader: row.get("uploader"),
+        origin_domain: row.get("origin_domain"),
+        mirrored: row.get("mirrored"),
+        created_ms: row.get::<_, i64>("created_ms") as u64,
+    }
+}
 
 pub struct PgStore {
     pool: Pool,
@@ -427,6 +453,54 @@ impl WaveStore for PgStore {
             .await
             .map_err(db_err)?;
         Ok(row.map(|r| r.get(0)))
+    }
+
+    async fn put_share(&self, meta: &ShareMeta) -> io::Result<()> {
+        let client = self.client().await?;
+        client
+            .execute(
+                "INSERT INTO shares (manifest_hash, wave, name, total_size, file_count, uploader, origin_domain, mirrored, created_ms)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 ON CONFLICT (manifest_hash) DO UPDATE SET mirrored = $8",
+                &[
+                    &meta.manifest_hash,
+                    &meta.wave,
+                    &meta.name,
+                    &(meta.total_size as i64),
+                    &(meta.file_count as i64),
+                    &meta.uploader,
+                    &meta.origin_domain,
+                    &meta.mirrored,
+                    &(meta.created_ms as i64),
+                ],
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn get_share(&self, manifest_hash: &str) -> io::Result<Option<ShareMeta>> {
+        let client = self.client().await?;
+        let row = client
+            .query_opt(
+                "SELECT * FROM shares WHERE manifest_hash = $1",
+                &[&manifest_hash],
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(row.as_ref().map(row_to_share))
+    }
+
+    async fn list_shares(&self, wave: &str) -> io::Result<Vec<ShareMeta>> {
+        let client = self.client().await?;
+        let rows = client
+            .query(
+                "SELECT * FROM shares WHERE wave = $1 ORDER BY created_ms DESC",
+                &[&wave],
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(rows.iter().map(row_to_share).collect())
     }
 
     async fn list_attachments(&self, wave: &str) -> io::Result<Vec<AttachmentMeta>> {

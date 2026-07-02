@@ -18,7 +18,13 @@ budgets (NFR-Cx), architecture decisions (ADR-1..5), and the phase roadmap
   `/api/waves/translation`). Gemini key comes from the `PROTOMOLECULE`
   env var (set in ~/.bashrc behind the interactive guard — extract with
   `eval "$(grep PROTOMOLECULE ~/.bashrc | head -1)"`).
-- **Phase 5 (P2P folder sharing) is next** per PRD §12.
+- **Phase 5 (folder sharing) complete**: `server/src/shares.rs` — FastCDC
+  chunking into the BLAKE3 CAS, FolderManifest protobuf (manifest hash =
+  share id/capability), federated multi-source chunk fetch with per-chunk
+  BLAKE3 verification, share announcements, mirroring. v0 transport is the
+  signed federation HTTP channel — iroh/QUIC deferred (does not build on
+  rustc 1.75), architecture is transport-agnostic.
+- **Phase 6 (polish: PWA, i18n, extension API, anti-abuse) is next**.
 - Deferred: OIDC login (FR-3), in-text anchored inline replies (FR-19),
   participant *removal* + federated blob fetch for attachments, gRPC/TLS
   transport for federation.
@@ -62,9 +68,12 @@ protoc**. Consequences:
   bound to `Y.XmlFragment`s in the `blips` map; thread tree in `manifest`
   (see `src/lib/wavemodel.ts`, mirrors PRD §4.3). Custom provider over the
   envelope protocol in `src/lib/provider.ts`.
-- Design language: **"Tidewriter's Desk"** — ivory paper, ink navy, tidal
-  teal, coral; Fraunces/Newsreader/Spline Sans Mono (@fontsource, bundled).
-  Use the frontend-design skill for UI work; no generic AI aesthetics.
+- Design language: **ProtoWave Brand v2** (source of truth: `pw-theme/`) —
+  luminous blues (Crest/Spray/Deep/Dusk over ink/slate/cloud), Archivo 900
+  display + Hanken Grotesk body + JetBrains Mono captions, pill buttons,
+  soft white cards, animated triangulated wave mesh
+  (`web/src/components/WaveMesh.vue` — the user's favorite element). Use
+  the frontend-design skill for UI work; no generic AI aesthetics.
 
 ## Commands
 

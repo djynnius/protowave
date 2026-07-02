@@ -39,7 +39,14 @@ npm run build          # type-check + production build
 
 ## Status
 
-**Phase 4 (Translation)** — see PRD §12 for the roadmap.
+**Phase 5 (Distributed folder sharing)** — waves now carry shared folders:
+content-defined chunks (FastCDC) in the BLAKE3 store, byte-verified on
+every transfer, fetched from any federated server that holds them (origin
+first, mirrors next) and pinnable locally ("mirror here") so shares
+survive the origin going offline. Share a folder straight from the
+browser's folder picker.
+
+Previously — **Phase 4 (Translation)** — see PRD §12 for the roadmap.
 
 Waves can opt in to live translation (with an explicit third-party-API
 disclosure): readers pick a language and every blip gains a translated
