@@ -153,6 +153,37 @@ async fn materialize(server: &Server, wavelet: &str) -> Doc {
 }
 
 #[tokio::test]
+async fn ollama_provider_calls_the_local_api() {
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use protowave_server::agent::{InferenceProvider, OllamaInference};
+
+    // A stand-in Ollama server: echoes the model and confirms the prompt
+    // carried our context, mimicking POST /api/generate.
+    async fn generate(Json(body): Json<serde_json::Value>) -> Json<serde_json::Value> {
+        let prompt = body["prompt"].as_str().unwrap_or("");
+        let grounded = prompt.contains("harbor");
+        Json(serde_json::json!({
+            "model": body["model"],
+            "response": if grounded { "The harbor plan is on track." } else { "no context" },
+            "done": true,
+        }))
+    }
+    let app = Router::new().route("/api/generate", post(generate));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let provider = OllamaInference::new(format!("http://{addr}"), "gemma3:270m".into());
+    assert_eq!(provider.model(), "ollama/gemma3:270m");
+    let answer = provider
+        .infer("what about the harbor?", "notes about the harbor")
+        .await
+        .unwrap();
+    assert_eq!(answer, "The harbor plan is on track.");
+}
+
+#[tokio::test]
 async fn agent_answers_as_a_blip_with_context() {
     let (server, _url) = spawn("localhost", HashMap::new(), true).await;
     let ada = server.register("ada").await;

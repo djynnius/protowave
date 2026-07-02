@@ -47,6 +47,10 @@ federates like any edit. A node can even route inference to a *peer's*
 model over the signed federation channel (mixture-of-peers). Honest limits:
 no local GPU here, so the model is each node's configured provider (Gemini);
 answers are advisory — verification stays an open problem (PRD §12.1, R11).
+Bring your own model: run `ollama serve`, then set `PROTOWAVE_OLLAMA` and
+`PROTOWAVE_OLLAMA_MODEL` on a node and its local model joins the Hive Mind
+(advertised in `.well-known`, answerable by federated peers) with no
+protocol changes — Gemini is used only when no Ollama is configured.
 
 **Phase 6 (Public beta readiness) — the PRD's v1 roadmap is complete.**
 ProtoWave is now an installable PWA with an offline shell, localized into

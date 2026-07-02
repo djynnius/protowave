@@ -38,8 +38,12 @@ budgets (NFR-Cx), architecture decisions (ADR-1..5), and the phase roadmap
   POST /api/waves/ask; RAG over the asker's accessible waves + shared files
   with provenance; signed federated inference `/federation/v0/infer`
   (mixture-of-peers), model advertised in .well-known. FI-x not FR-x.
-  Constraints: no local GPU → provider stand-in (Gemini); R11 verification
-  unsolved (answers advisory). PROTOWAVE_INFER_MODEL overrides model.
+  Constraints: R11 verification unsolved (answers advisory).
+  Provider selection: PROTOWAVE_OLLAMA + PROTOWAVE_OLLAMA_MODEL (self-hosted,
+  takes precedence) else Gemini (PROTOMOLECULE, PROTOWAVE_INFER_MODEL).
+  OllamaInference calls localhost:11434 /api/generate. Live: protowave2
+  runs ollama/gemma3:270m via the host's Ollama (LXD reverse proxy device
+  `ollama`: bind=guest, container 127.0.0.1:11434 → host 127.0.0.1:11434).
 - Deferred: OIDC login (FR-3), in-text anchored inline replies (FR-19),
   participant *removal* + federated blob fetch for attachments, gRPC/TLS
   transport for federation.

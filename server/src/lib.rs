@@ -70,23 +70,32 @@ impl AppState {
             limits: limits::RateLimiter::default(),
             domain: domain.into(),
         });
-        // Gemini Flash-Lite-class reference provider (FR-46); swap via env.
+        // Translation provider: Gemini when a key is present (FR-46).
         if let Ok(key) = std::env::var("PROTOMOLECULE") {
             let model = std::env::var("PROTOWAVE_TRANSLATE_MODEL")
                 .unwrap_or_else(|_| "gemini-3.1-flash-lite".into());
             tracing::info!(%model, "translation provider configured");
             state
                 .translation
-                .set_translator(Arc::new(translate::GeminiTranslator::new(
-                    key.clone(),
-                    model,
-                )));
-            // The same key powers the wave agent's inference (FI-6, §12.1).
-            let infer_model = std::env::var("PROTOWAVE_INFER_MODEL")
-                .unwrap_or_else(|_| "gemini-3.1-flash-lite".into());
+                .set_translator(Arc::new(translate::GeminiTranslator::new(key, model)));
+        }
+        // Inference provider (FI-6, §12.1). A self-hosted Ollama model takes
+        // precedence — that's the "bring your own model" path into the Hive
+        // Mind — otherwise fall back to Gemini if a key is present.
+        if let Ok(base) = std::env::var("PROTOWAVE_OLLAMA") {
+            let model =
+                std::env::var("PROTOWAVE_OLLAMA_MODEL").unwrap_or_else(|_| "llama3.2".into());
+            tracing::info!(%base, %model, "inference provider: ollama (self-hosted)");
             state
                 .inference
-                .set(Arc::new(agent::GeminiInference::new(key, infer_model)));
+                .set(Arc::new(agent::OllamaInference::new(base, model)));
+        } else if let Ok(key) = std::env::var("PROTOMOLECULE") {
+            let model = std::env::var("PROTOWAVE_INFER_MODEL")
+                .unwrap_or_else(|_| "gemini-3.1-flash-lite".into());
+            tracing::info!(%model, "inference provider: gemini");
+            state
+                .inference
+                .set(Arc::new(agent::GeminiInference::new(key, model)));
         }
         spawn_search_indexer(state.clone());
         translate::spawn_translation_worker(state.clone());

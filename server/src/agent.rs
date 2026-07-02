@@ -127,6 +127,71 @@ impl InferenceProvider for GeminiInference {
     }
 }
 
+/// Self-hosted provider: a local Ollama server (FI-6, PRD §12.1). This is
+/// the "bring your own model" path — an operator runs `ollama serve`, pulls
+/// a model, points a ProtoWave node at it, and that model joins the Hive
+/// Mind (advertised in `.well-known`, answerable by federated peers) with
+/// no protocol changes. Plaintext HTTP: Ollama listens on localhost.
+pub struct OllamaInference {
+    base: String,
+    model: String,
+    client: Client<HttpConnector, Full<Bytes>>,
+}
+
+impl OllamaInference {
+    /// `base` is the Ollama server URL, e.g. `http://127.0.0.1:11434`.
+    pub fn new(base: String, model: String) -> Self {
+        Self {
+            base: base.trim_end_matches('/').to_string(),
+            model,
+            client: Client::builder(TokioExecutor::new()).build_http(),
+        }
+    }
+}
+
+#[async_trait]
+impl InferenceProvider for OllamaInference {
+    async fn infer(&self, prompt: &str, context: &str) -> io::Result<String> {
+        let full = format!(
+            "You are the assistant participant in a ProtoWave collaborative wave. \
+             Answer using the CONTEXT when relevant and cite the source inline. \
+             Be concise — your reply is posted as a message for everyone on the \
+             wave.\n\nCONTEXT:\n{context}\n\nQUESTION:\n{prompt}"
+        );
+        let body = serde_json::json!({
+            "model": self.model,
+            "prompt": full,
+            "stream": false,
+            "options": { "temperature": 0.3 }
+        })
+        .to_string();
+        let uri: hyper::Uri = format!("{}/api/generate", self.base)
+            .parse()
+            .map_err(other)?;
+        let req = hyper::Request::post(uri)
+            .header("content-type", "application/json")
+            .body(Full::new(Bytes::from(body)))
+            .map_err(other)?;
+        let res = self.client.request(req).await.map_err(other)?;
+        let status = res.status();
+        let bytes = res.into_body().collect().await.map_err(other)?.to_bytes();
+        if !status.is_success() {
+            return Err(other(format!("ollama: {status}")));
+        }
+        let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(other)?;
+        json["response"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| other("ollama: empty response"))
+    }
+
+    fn model(&self) -> String {
+        // Provenance makes clear this is a self-hosted local model.
+        format!("ollama/{}", self.model)
+    }
+}
+
 /// Holds this node's inference provider, if any (FI-6, swappable).
 #[derive(Default)]
 pub struct InferenceHub {

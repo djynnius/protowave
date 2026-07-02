@@ -484,7 +484,7 @@ Every implementation of a hot path below must meet its Big-O budget; regressions
 - **Federated inference (mixture-of-peers).** `POST /federation/v0/infer` (signed, participant-domain ACL) lets a wave's agent route to another node's model; each node advertises its model id in `.well-known/protowave` (FI-1). Provider is swappable behind `InferenceProvider` (FI-6).
 
 **Honest constraints (do not overstate this phase):**
-- These deployments have no GPU, so the "peer-hosted model" is each node's configured API provider (Gemini here), not a self-hosted local LLM. The federated-inference *protocol* is real and tested; dropping in llama.cpp-class local models is a provider change, not an architecture change.
+- Self-hosted local models are supported via **Ollama** (`OllamaInference`, selected by `PROTOWAVE_OLLAMA`): a node points at a local `ollama serve`, and its model auto-joins the Hive Mind. Gemini is the fallback when no local model is configured. GPU is optional — small models run on CPU (the live deployment runs `gemma3:270m`). Multi-model-per-node routing (capability manifests listing several models, a `model` field on InferRequest) is the remaining FI-1 step.
 - **Answer verification (R11) remains unsolved.** Answers are advisory; the UI says "verify before relying on it." Redundant-sampling/attribution scaffolding is the only mitigation, and it is partial.
 - No agent autonomy loop, tool use, or multi-step planning — an agent answers when asked, once.
 
