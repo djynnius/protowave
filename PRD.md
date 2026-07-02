@@ -442,7 +442,7 @@ Every implementation of a hot path below must meet its Big-O budget; regressions
 - **Editor:** **Tiptap 2** with **y-prosemirror** binding to yrs via a custom provider speaking our WebSocket envelope (a y-websocket-derived sync protocol on the `sync` + `awareness` channels). Custom Tiptap extensions: blip boundaries, inline-reply anchors, mentions, attachment cards, folder-share cards, translation overlay decorations.
 - **Markdown:** `markdown-it` + **DOMPurify** for rendering `.md` files and read-only content; **tiptap-markdown** + input rules for authoring (FR-16); **shiki** for highlighting (FR-34).
 - **Rendering discipline:** inbox and wave views virtualized with TanStack Virtual — a wave with 5k blips renders O(viewport), never O(blips) (NFR-C10); blip fragments lazy-load on scroll.
-- **UI kit:** Reka UI (headless, accessible primitives) + Tailwind CSS; WCAG 2.1 AA (NFR-19).
+- **UI kit:** Reka UI (headless, accessible primitives — the Vue continuation of Radix UI, formerly "Radix Vue") + Tailwind CSS; WCAG 2.1 AA (NFR-19). Visual design must be distinctive and crafted, not template-generic.
 - **PWA:** installable, offline shell; offline *editing* rides on yrs local persistence (y-indexeddb-equivalent over the same provider), reconciling on reconnect (US-5, NFR-21).
 - **State boundaries:** Pinia owns app state (session, inbox, settings); yrs owns document state — never duplicate document content into Pinia.
 
