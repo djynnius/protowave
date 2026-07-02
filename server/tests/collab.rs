@@ -131,10 +131,7 @@ fn awareness_frame(wavelet: &str, payload: Vec<u8>) -> Message {
 
 enum Inbound {
     Subscribed(String),
-    SyncState {
-        state_vector: Vec<u8>,
-        diff: Vec<u8>,
-    },
+    SyncState { diff: Vec<u8> },
     Update(Vec<u8>),
     Awareness(Vec<u8>),
     Error(String),
@@ -164,12 +161,7 @@ async fn recv(ws: &mut Ws) -> Inbound {
             pb::Channel::Sync => {
                 let msg = pb::SyncMessage::decode(env.payload.as_slice()).unwrap();
                 match msg.kind.unwrap() {
-                    sync_message::Kind::SyncState(s) => {
-                        return Inbound::SyncState {
-                            state_vector: s.state_vector,
-                            diff: s.diff,
-                        }
-                    }
+                    sync_message::Kind::SyncState(s) => return Inbound::SyncState { diff: s.diff },
                     sync_message::Kind::Update(u) => return Inbound::Update(u.update),
                 }
             }

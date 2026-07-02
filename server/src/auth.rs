@@ -104,16 +104,13 @@ pub struct SessionResponse {
     pub participant: String,
 }
 
-fn start_session(
-    state: &AppState,
-    participant: &ParticipantId,
-) -> Result<
-    (
-        AppendHeaders<[(axum::http::HeaderName, String); 1]>,
-        Json<SessionResponse>,
-    ),
-    ApiError,
-> {
+/// A session response: the Set-Cookie header plus the participant body.
+type SessionReply = (
+    AppendHeaders<[(axum::http::HeaderName, String); 1]>,
+    Json<SessionResponse>,
+);
+
+fn start_session(state: &AppState, participant: &ParticipantId) -> Result<SessionReply, ApiError> {
     let sid = new_session_id();
     state.store.put_session(&sid, participant)?;
     Ok((
