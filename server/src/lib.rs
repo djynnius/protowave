@@ -1,49 +1,110 @@
-//! ProtoWave server (Phase 1): auth, wave lifecycle, and the collaborative
-//! wave engine over the multiplexed WebSocket protocol (PRD §7, §8.1).
+//! ProtoWave server (Phase 2): auth, wave lifecycle, collaborative engine,
+//! attachments, playback, and full-text search over the multiplexed
+//! WebSocket + REST protocol (PRD §7, §8.1).
 
 pub mod api;
+pub mod attachments;
 pub mod auth;
+pub mod cas;
 pub mod engine;
+pub mod search;
 pub mod store;
+pub mod store_pg;
 pub mod ws;
 
+use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 
 use axum::routing::{get, post};
 use axum::Router;
+use tower_http::services::{ServeDir, ServeFile};
 
+use cas::Cas;
 use engine::Engine;
+use search::{SearchIndex, TantivyIndex};
 use store::{FileStore, WaveStore};
+use store_pg::PgStore;
 
 pub struct AppState {
     pub store: Arc<dyn WaveStore>,
     pub engine: Engine,
+    pub cas: Cas,
+    pub search: Arc<dyn SearchIndex>,
     /// This server's federation domain (PRD §8.2).
     pub domain: String,
 }
 
 impl AppState {
-    pub fn new(store: Arc<dyn WaveStore>, domain: impl Into<String>) -> Self {
-        Self {
+    /// `data_dir` hosts the CAS blobs and search index regardless of which
+    /// WaveStore backend is in use.
+    pub fn build(
+        store: Arc<dyn WaveStore>,
+        domain: impl Into<String>,
+        data_dir: &Path,
+        fsync: bool,
+    ) -> std::io::Result<Arc<Self>> {
+        let state = Arc::new(Self {
             engine: Engine::new(store.clone()),
             store,
+            cas: Cas::open(data_dir.join("blobs"), fsync)?,
+            search: Arc::new(TantivyIndex::open(&data_dir.join("search"))?),
             domain: domain.into(),
-        }
+        });
+        spawn_search_indexer(state.clone());
+        Ok(state)
     }
 
-    pub fn from_env() -> std::io::Result<Self> {
+    pub async fn from_env() -> std::io::Result<Arc<Self>> {
         let domain = std::env::var("PROTOWAVE_DOMAIN").unwrap_or_else(|_| "localhost".into());
         let data_dir = std::env::var("PROTOWAVE_DATA_DIR").unwrap_or_else(|_| "data".into());
         let fsync = std::env::var("PROTOWAVE_FSYNC")
             .map(|v| v != "0")
             .unwrap_or(true);
-        let store = Arc::new(FileStore::open(data_dir, fsync)?);
-        Ok(Self::new(store, domain))
+        let store: Arc<dyn WaveStore> = match std::env::var("PROTOWAVE_PG") {
+            Ok(url) => {
+                tracing::info!("using PostgreSQL WaveStore");
+                Arc::new(PgStore::connect(&url).await?)
+            }
+            Err(_) => Arc::new(FileStore::open(&data_dir, fsync)?),
+        };
+        Self::build(store, domain, Path::new(&data_dir), fsync)
     }
 }
 
+/// Incremental search indexing (FR-29): consume the engine's change stream,
+/// coalesce bursts, re-extract per-wave text.
+fn spawn_search_indexer(state: Arc<AppState>) {
+    let mut rx = state.engine.change_stream();
+    tokio::spawn(async move {
+        while let Some(first) = rx.recv().await {
+            // Coalesce whatever else arrived in the meantime.
+            let mut batch = HashSet::new();
+            batch.insert(first);
+            while let Ok(more) = rx.try_recv() {
+                batch.insert(more);
+            }
+            for name in batch {
+                let wave_key = name.wave_id.to_string();
+                let title = match state.store.get_wave(&wave_key).await {
+                    Ok(Some(meta)) => meta.title,
+                    _ => continue,
+                };
+                if let Ok(live) = state.engine.open_wavelet(&name).await {
+                    let body = live.extract_text();
+                    if let Err(e) = state.search.upsert(&wave_key, &title, &body) {
+                        tracing::warn!(%e, wave = %wave_key, "search upsert failed");
+                    }
+                }
+            }
+            // Light rate limit; indexing lags edits by at most this.
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    });
+}
+
 pub fn app(state: Arc<AppState>) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/ws", get(ws::ws_upgrade))
         .route("/api/register", post(auth::register))
@@ -52,5 +113,24 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route("/api/me", get(auth::me))
         .route("/api/waves", get(api::list_waves).post(api::create_wave))
         .route("/api/waves/participants", post(api::add_participant))
-        .with_state(state)
+        .route("/api/waves/read", post(api::mark_read))
+        .route("/api/history", get(api::history))
+        .route("/api/search", get(api::search))
+        .route(
+            "/api/attachments",
+            get(attachments::list).post(attachments::upload),
+        )
+        .route("/api/attachments/:hash", get(attachments::download))
+        .with_state(state);
+
+    // Single-binary deploy (G11): serve the built SPA when present, with
+    // index.html fallback for client-side routes.
+    let dist = std::env::var("PROTOWAVE_WEB_DIST").unwrap_or_else(|_| "web/dist".into());
+    if Path::new(&dist).join("index.html").exists() {
+        let spa = ServeDir::new(&dist)
+            .not_found_service(ServeFile::new(Path::new(&dist).join("index.html")));
+        router.fallback_service(spa)
+    } else {
+        router
+    }
 }

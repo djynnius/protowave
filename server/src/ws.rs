@@ -95,7 +95,9 @@ async fn session(mut socket: WebSocket, state: Arc<AppState>, user: ParticipantI
                     Some(Ok(_)) => continue,
                     Some(Err(_)) => break,
                 };
-                if let Some(reply) = handle_frame(&state, &user, conn_id, &frame, &mut subs, &out_tx) {
+                if let Some(reply) =
+                    handle_frame(&state, &user, conn_id, &frame, &mut subs, &out_tx).await
+                {
                     if socket.send(Message::Binary(reply)).await.is_err() {
                         break;
                     }
@@ -123,7 +125,7 @@ async fn session(mut socket: WebSocket, state: Arc<AppState>, user: ParticipantI
 
 /// Handle one inbound frame; the immediate reply (if any) is returned, while
 /// subscription streams flow through `out_tx`.
-fn handle_frame(
+async fn handle_frame(
     state: &Arc<AppState>,
     user: &ParticipantId,
     conn_id: u64,
@@ -137,7 +139,7 @@ fn handle_frame(
             let msg = pb::ControlMessage::decode(envelope.payload.as_slice()).ok()?;
             match msg.kind? {
                 control_message::Kind::Subscribe(sub) => {
-                    Some(subscribe(state, user, conn_id, sub, subs, out_tx))
+                    Some(subscribe(state, user, conn_id, sub, subs, out_tx).await)
                 }
                 control_message::Kind::Unsubscribe(unsub) => {
                     if let Some(sub) = subs.remove(&unsub.wavelet) {
@@ -162,7 +164,11 @@ fn handle_frame(
                 }
             };
             if let Some(sync_message::Kind::Update(update)) = msg.kind {
-                match state.engine.apply_update(&sub.live, update.update, conn_id) {
+                match state
+                    .engine
+                    .apply_update(&sub.live, update.update, conn_id)
+                    .await
+                {
                     Ok(()) => None,
                     Err(EngineError::BadPayload(e)) => {
                         Some(error_frame(&msg.wavelet, "bad-update", &e))
@@ -191,7 +197,7 @@ fn handle_frame(
     }
 }
 
-fn subscribe(
+async fn subscribe(
     state: &Arc<AppState>,
     user: &ParticipantId,
     conn_id: u64,
@@ -206,7 +212,7 @@ fn subscribe(
 
     // ACL: only wave participants may subscribe (FR-6).
     let wave_key = name.wave_id.to_string();
-    match state.store.get_wave(&wave_key) {
+    match state.store.get_wave(&wave_key).await {
         Ok(Some(meta)) if meta.participants.contains(&user.to_string()) => {}
         Ok(Some(_)) => return error_frame(&req.wavelet, "not-participant", "not on this wave"),
         Ok(None) => return error_frame(&req.wavelet, "not-found", "no such wave"),
@@ -216,7 +222,7 @@ fn subscribe(
         }
     }
 
-    let live = match state.engine.open_wavelet(&name) {
+    let live = match state.engine.open_wavelet(&name).await {
         Ok(live) => live,
         Err(e) => {
             tracing::error!(?e, wavelet = %req.wavelet, "open_wavelet failed");

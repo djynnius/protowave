@@ -33,7 +33,7 @@ struct TestServer {
 async fn spawn() -> TestServer {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(FileStore::open(dir.path(), false).unwrap());
-    let state = Arc::new(AppState::new(store, "localhost"));
+    let state = AppState::build(store, "localhost", dir.path(), false).unwrap();
     let router = app(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

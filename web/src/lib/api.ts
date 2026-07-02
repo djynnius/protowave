@@ -7,6 +7,22 @@ export interface WaveDigest {
   rootWavelet: string
   createdBy: string
   lastActivityMs: number
+  unread: boolean
+}
+
+export interface AttachmentMeta {
+  hash: string
+  wave: string
+  name: string
+  mime: string
+  size: number
+  uploader: string
+}
+
+export interface SearchHit {
+  wave: string
+  title: string
+  snippet: string
 }
 
 export class ApiError extends Error {
@@ -52,4 +68,24 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ wave, participant }),
     }),
+  markRead: (wave: string) =>
+    request<{ ok: boolean }>('/api/waves/read', {
+      method: 'POST',
+      body: JSON.stringify({ wave }),
+    }),
+  search: (q: string) => request<SearchHit[]>(`/api/search?q=${encodeURIComponent(q)}`),
+  listAttachments: (wave: string) =>
+    request<AttachmentMeta[]>(`/api/attachments?wave=${encodeURIComponent(wave)}`),
+  uploadAttachment: async (wave: string, file: File): Promise<AttachmentMeta> => {
+    const form = new FormData()
+    form.append('file', file, file.name)
+    const res = await fetch(`/api/attachments?wave=${encodeURIComponent(wave)}`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      body: form,
+    })
+    const body = await res.json().catch(() => null)
+    if (!res.ok) throw new ApiError(res.status, body?.error ?? res.statusText)
+    return body as AttachmentMeta
+  },
 }

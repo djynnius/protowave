@@ -32,5 +32,10 @@ export const useWaves = defineStore('waves', () => {
     return list.value.find((w) => w.wave === wave)
   }
 
-  return { list, loading, refresh, create, addParticipant, byId }
+  function clearUnread(wave: string) {
+    const digest = list.value.find((w) => w.wave === wave)
+    if (digest) digest.unread = false
+  }
+
+  return { list, loading, refresh, create, addParticipant, byId, clearUnread }
 })

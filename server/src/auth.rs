@@ -76,7 +76,8 @@ impl FromRequestParts<Arc<AppState>> for CurrentUser {
             .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "not logged in".into()))?;
         let participant = state
             .store
-            .get_session(&sid)?
+            .get_session(&sid)
+            .await?
             .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "session expired".into()))?;
         Ok(CurrentUser(participant))
     }
@@ -110,9 +111,12 @@ type SessionReply = (
     Json<SessionResponse>,
 );
 
-fn start_session(state: &AppState, participant: &ParticipantId) -> Result<SessionReply, ApiError> {
+async fn start_session(
+    state: &AppState,
+    participant: &ParticipantId,
+) -> Result<SessionReply, ApiError> {
     let sid = new_session_id();
-    state.store.put_session(&sid, participant)?;
+    state.store.put_session(&sid, participant).await?;
     Ok((
         AppendHeaders([(SET_COOKIE, session_cookie(&sid, SESSION_MAX_AGE_SECS))]),
         Json(SessionResponse {
@@ -139,16 +143,19 @@ pub async fn register(
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .to_string();
 
-    let created = state.store.create_account(&Account {
-        participant: participant.to_string(),
-        password_hash: hash,
-        created_ms: now_ms(),
-    })?;
+    let created = state
+        .store
+        .create_account(&Account {
+            participant: participant.to_string(),
+            password_hash: hash,
+            created_ms: now_ms(),
+        })
+        .await?;
     if !created {
         return Err(ApiError(StatusCode::CONFLICT, "name already taken".into()));
     }
     tracing::info!(%participant, "account created");
-    start_session(&state, &participant)
+    start_session(&state, &participant).await
 }
 
 pub async fn login(
@@ -159,14 +166,15 @@ pub async fn login(
     let participant = ParticipantId::new(&req.name, &state.domain).map_err(|_| unauthorized())?;
     let account = state
         .store
-        .get_account(&participant)?
+        .get_account(&participant)
+        .await?
         .ok_or_else(unauthorized)?;
     let parsed = PasswordHash::new(&account.password_hash)
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Argon2::default()
         .verify_password(req.password.as_bytes(), &parsed)
         .map_err(|_| unauthorized())?;
-    start_session(&state, &participant)
+    start_session(&state, &participant).await
 }
 
 pub async fn logout(
@@ -174,7 +182,7 @@ pub async fn logout(
     parts: axum::http::request::Parts,
 ) -> Result<impl IntoResponse, ApiError> {
     if let Some(sid) = session_id_from_cookies(&parts) {
-        state.store.delete_session(&sid)?;
+        state.store.delete_session(&sid).await?;
     }
     Ok((
         AppendHeaders([(SET_COOKIE, session_cookie("", 0))]),

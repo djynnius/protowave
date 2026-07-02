@@ -39,17 +39,23 @@ npm run build          # type-check + production build
 
 ## Status
 
-**Phase 1 (single-server collaboration)** — see PRD §12 for the roadmap.
+**Phase 2 (Wave parity)** — see PRD §12 for the roadmap.
 
-Working now: accounts (argon2id + sessions), wave creation and inbox,
-real-time collaborative editing (yrs/Yjs CRDTs over the protobuf WebSocket
-protocol), threaded blips, live collaborator cursors and presence, offline
-reconnect convergence, and durable file-backed persistence with periodic
-snapshots.
+Working now: accounts (argon2id + sessions), wave creation and inbox with
+unread badges, real-time collaborative editing (yrs/Yjs CRDTs over the
+protobuf WebSocket protocol), threaded blips, live collaborator cursors and
+presence, offline reconnect convergence, **playback** (replay any wave from
+the beginning), **full-text search** (embedded tantivy), **attachments**
+(BLAKE3 content-addressed, deduplicated, ACL-checked) with **markdown
+rendering** of shared `.md` files, and pluggable persistence: embedded
+file store (default) or **PostgreSQL** (`PROTOWAVE_PG=<conn-string>`).
+
+The server also serves the built SPA (`web/dist`) when present — a single
+binary is a complete deployment.
 
 Try it: run the server, then `npm run dev` in `web/`, open two browsers,
 register two accounts, create a wave, add the second account, and type in
-both windows.
+both windows. Hit ↺ replay to scrub through history.
 
 ## License
 

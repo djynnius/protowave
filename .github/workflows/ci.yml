@@ -11,6 +11,20 @@ env:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: protowave
+          POSTGRES_PASSWORD: protowave-dev
+          POSTGRES_DB: protowave_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      PROTOWAVE_TEST_PG: host=localhost user=protowave password=protowave-dev dbname=protowave_test
     steps:
       - uses: actions/checkout@v4
       # Workspace MSRV; Cargo.lock pins pre-edition2024 transitive versions,

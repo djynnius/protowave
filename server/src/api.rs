@@ -1,16 +1,19 @@
-//! Wave lifecycle REST API (FR-5..6, FR-28).
+//! Wave lifecycle REST API (FR-5..6, FR-8, FR-25..26, FR-28..29).
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use axum::extract::State;
-use axum::http::StatusCode;
+use axum::extract::{Query, State};
+use axum::http::{header, StatusCode};
+use axum::response::IntoResponse;
 use axum::Json;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
-use protowave_core::{ParticipantId, WaveId};
+use protowave_core::{ParticipantId, WaveId, WaveletName};
 
 use crate::auth::{ApiError, CurrentUser};
+use crate::search::SearchHit;
 use crate::store::{now_ms, WaveMeta};
 use crate::AppState;
 
@@ -29,12 +32,14 @@ pub struct WaveDigest {
     pub created_by: String,
     #[serde(rename = "lastActivityMs")]
     pub last_activity_ms: u64,
+    pub unread: bool,
 }
 
-impl From<WaveMeta> for WaveDigest {
-    fn from(meta: WaveMeta) -> Self {
+impl WaveDigest {
+    fn new(meta: WaveMeta, read_mark: u64) -> Self {
         let root_wavelet = format!("{}/{ROOT_WAVELET}", meta.wave);
         Self {
+            unread: meta.last_activity_ms > read_mark,
             wave: meta.wave,
             title: meta.title,
             participants: meta.participants,
@@ -73,17 +78,26 @@ pub async fn create_wave(
         created_ms: now,
         last_activity_ms: now,
     };
-    state.store.put_wave(&meta)?;
+    state.store.put_wave(&meta).await?;
     tracing::info!(wave = %meta.wave, by = %me, "wave created");
-    Ok((StatusCode::CREATED, Json(meta.into())))
+    Ok((StatusCode::CREATED, Json(WaveDigest::new(meta, now))))
 }
 
 pub async fn list_waves(
     State(state): State<Arc<AppState>>,
     CurrentUser(me): CurrentUser,
 ) -> Result<Json<Vec<WaveDigest>>, ApiError> {
-    let waves = state.store.list_waves_for(&me)?;
-    Ok(Json(waves.into_iter().map(WaveDigest::from).collect()))
+    let waves = state.store.list_waves_for(&me).await?;
+    let marks = state.store.read_marks(&me).await?;
+    Ok(Json(
+        waves
+            .into_iter()
+            .map(|meta| {
+                let mark = marks.get(&meta.wave).copied().unwrap_or(0);
+                WaveDigest::new(meta, mark)
+            })
+            .collect(),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -101,13 +115,14 @@ pub async fn add_participant(
         .participant
         .parse()
         .map_err(|e| ApiError::bad_request(format!("invalid participant: {e}")))?;
-    if state.store.get_account(&added)?.is_none() {
+    if state.store.get_account(&added).await?.is_none() {
         return Err(ApiError::bad_request("no such account on this server"));
     }
 
     let mut meta = state
         .store
-        .get_wave(&req.wave)?
+        .get_wave(&req.wave)
+        .await?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such wave".into()))?;
     if !meta.participants.contains(&me.to_string()) {
         return Err(ApiError(StatusCode::FORBIDDEN, "not a participant".into()));
@@ -116,8 +131,86 @@ pub async fn add_participant(
     if !meta.participants.contains(&addr) {
         meta.participants.push(addr);
         meta.last_activity_ms = now_ms();
-        state.store.put_wave(&meta)?;
+        state.store.put_wave(&meta).await?;
         tracing::info!(wave = %meta.wave, participant = %added, by = %me, "participant added");
     }
-    Ok(Json(meta.into()))
+    Ok(Json(WaveDigest::new(meta, u64::MAX)))
+}
+
+// ---- read marks (FR-8) ----
+
+#[derive(Deserialize)]
+pub struct MarkReadRequest {
+    pub wave: String,
+}
+
+pub async fn mark_read(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(me): CurrentUser,
+    Json(req): Json<MarkReadRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.store.set_read_mark(&me, &req.wave, now_ms()).await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---- playback (FR-25..26) ----
+
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    pub wavelet: String,
+}
+
+/// The full update log as length-prefixed binary frames (the same format as
+/// the on-disk log). The client replays 0..k to materialize any version.
+pub async fn history(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(me): CurrentUser,
+    Query(q): Query<HistoryQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let name: WaveletName = q
+        .wavelet
+        .parse()
+        .map_err(|_| ApiError::bad_request("bad wavelet name"))?;
+    let meta = state
+        .store
+        .get_wave(&name.wave_id.to_string())
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such wave".into()))?;
+    if !meta.participants.contains(&me.to_string()) {
+        return Err(ApiError(StatusCode::FORBIDDEN, "not a participant".into()));
+    }
+
+    let updates = state.store.read_all_updates(&name).await?;
+    let mut body = Vec::new();
+    for update in &updates {
+        body.extend_from_slice(&(update.len() as u32).to_le_bytes());
+        body.extend_from_slice(update);
+    }
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], body))
+}
+
+// ---- search (FR-29) ----
+
+#[derive(Deserialize)]
+pub struct SearchQuery {
+    pub q: String,
+}
+
+pub async fn search(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(me): CurrentUser,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<Vec<SearchHit>>, ApiError> {
+    if query.q.trim().is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+    let allowed: HashSet<String> = state
+        .store
+        .list_waves_for(&me)
+        .await?
+        .into_iter()
+        .map(|w| w.wave)
+        .collect();
+    let hits = state.search.query(&query.q, &allowed, 20)?;
+    Ok(Json(hits))
 }

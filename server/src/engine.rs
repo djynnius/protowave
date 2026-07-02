@@ -10,10 +10,11 @@ use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
-use yrs::{Doc, ReadTxn, StateVector, Transact, Update};
+use yrs::Out;
+use yrs::{Doc, GetString, Map, ReadTxn, StateVector, Transact, Update};
 
 use protowave_core::WaveletName;
 
@@ -24,7 +25,6 @@ pub const SNAPSHOT_INTERVAL: u64 = 500;
 
 #[derive(Debug)]
 pub enum EngineError {
-    NotFound,
     BadPayload(String),
     Io(io::Error),
 }
@@ -53,6 +53,8 @@ pub struct LiveWavelet {
     pub name: WaveletName,
     doc: Mutex<Doc>,
     update_count: AtomicU64,
+    /// Serializes log appends per wavelet (PG seq allocation relies on it).
+    append_lock: tokio::sync::Mutex<()>,
     pub broadcast: broadcast::Sender<WaveletEvent>,
     /// Latest awareness payload per connection, replayed to new subscribers.
     awareness: Mutex<HashMap<u64, Arc<Vec<u8>>>>,
@@ -71,6 +73,23 @@ impl LiveWavelet {
         Ok((txn.state_vector().encode_v1(), txn.encode_diff_v1(&sv)))
     }
 
+    /// Plain text of all blip content — feeds the search index (FR-29).
+    /// XML tags from the rich-text serialization are stripped.
+    pub fn extract_text(&self) -> String {
+        let doc = self.doc.lock().unwrap();
+        let txn = doc.transact();
+        let mut out = String::new();
+        if let Some(blips) = txn.get_map("blips") {
+            for (_, value) in blips.iter(&txn) {
+                if let Out::YXmlFragment(frag) = value {
+                    strip_tags(&frag.get_string(&txn), &mut out);
+                    out.push(' ');
+                }
+            }
+        }
+        out
+    }
+
     pub fn cached_awareness(&self) -> Vec<Arc<Vec<u8>>> {
         self.awareness.lock().unwrap().values().cloned().collect()
     }
@@ -84,9 +103,29 @@ impl LiveWavelet {
     }
 }
 
+/// Replace `<tag>` runs with spaces, decoding nothing — good enough for
+/// indexing, never rendered.
+fn strip_tags(xml: &str, out: &mut String) {
+    let mut in_tag = false;
+    for ch in xml.chars() {
+        match ch {
+            '<' => {
+                in_tag = true;
+                out.push(' ');
+            }
+            '>' => in_tag = false,
+            c if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+}
+
 pub struct Engine {
     store: Arc<dyn WaveStore>,
     open: Mutex<HashMap<String, Arc<LiveWavelet>>>,
+    /// Notified with the wavelet name after every applied update; the search
+    /// indexer listens (FR-29 incremental indexing).
+    changed_tx: Mutex<Option<mpsc::UnboundedSender<WaveletName>>>,
 }
 
 impl Engine {
@@ -94,17 +133,24 @@ impl Engine {
         Self {
             store,
             open: Mutex::new(HashMap::new()),
+            changed_tx: Mutex::new(None),
         }
     }
 
+    pub fn change_stream(&self) -> mpsc::UnboundedReceiver<WaveletName> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        *self.changed_tx.lock().unwrap() = Some(tx);
+        rx
+    }
+
     /// Materialize a wavelet: snapshot + log tail → yrs Doc (NFR-C3).
-    pub fn open_wavelet(&self, name: &WaveletName) -> Result<Arc<LiveWavelet>, EngineError> {
+    pub async fn open_wavelet(&self, name: &WaveletName) -> Result<Arc<LiveWavelet>, EngineError> {
         let key = name.to_string();
         if let Some(live) = self.open.lock().unwrap().get(&key) {
             return Ok(live.clone());
         }
 
-        let record = self.store.load_wavelet(name)?;
+        let record = self.store.load_wavelet(name).await?;
         let doc = Doc::new();
         {
             let mut txn = doc.transact_mut();
@@ -119,6 +165,7 @@ impl Engine {
             name: name.clone(),
             doc: Mutex::new(doc),
             update_count: AtomicU64::new(record.total_updates),
+            append_lock: tokio::sync::Mutex::new(()),
             broadcast: tx,
             awareness: Mutex::new(HashMap::new()),
         });
@@ -130,7 +177,7 @@ impl Engine {
 
     /// Apply a client update: mutate the doc, append to the durable log,
     /// snapshot every k updates, fan out to subscribers.
-    pub fn apply_update(
+    pub async fn apply_update(
         &self,
         live: &LiveWavelet,
         bytes: Vec<u8>,
@@ -145,28 +192,31 @@ impl Engine {
             txn.apply_update(update);
             drop(txn);
 
-            let count = self.store.append_update(&live.name, &bytes)?;
+            let txn = doc.transact();
+            Some(txn.encode_state_as_update_v1(&StateVector::default()))
+        };
+
+        {
+            let _append = live.append_lock.lock().await;
+            let count = self.store.append_update(&live.name, &bytes).await?;
             live.update_count.store(count, Ordering::SeqCst);
             if count % SNAPSHOT_INTERVAL == 0 {
-                let txn = doc.transact();
-                Some((
-                    txn.encode_state_as_update_v1(&StateVector::default()),
-                    count,
-                ))
-            } else {
-                None
+                if let Some(snap) = snapshot {
+                    self.store.save_snapshot(&live.name, &snap, count).await?;
+                }
             }
-        };
-        if let Some((snap, covered)) = snapshot {
-            self.store.save_snapshot(&live.name, &snap, covered)?;
         }
         self.store
-            .touch_wave(&live.name.wave_id.to_string(), now_ms())?;
+            .touch_wave(&live.name.wave_id.to_string(), now_ms())
+            .await?;
 
         let _ = live.broadcast.send(WaveletEvent {
             from,
             kind: EventKind::Update(Arc::new(bytes)),
         });
+        if let Some(tx) = self.changed_tx.lock().unwrap().as_ref() {
+            let _ = tx.send(live.name.clone());
+        }
         Ok(())
     }
 
@@ -184,7 +234,7 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::store::FileStore;
-    use yrs::{GetString, Text};
+    use yrs::Text;
 
     fn engine() -> (tempfile::TempDir, Engine) {
         let dir = tempfile::tempdir().unwrap();
@@ -203,20 +253,22 @@ mod tests {
         doc.transact().encode_diff_v1(&before)
     }
 
-    #[test]
-    fn concurrent_edits_converge_and_persist() {
+    #[tokio::test]
+    async fn concurrent_edits_converge_and_persist() {
         let (dir, engine) = engine();
         let name: WaveletName = "example.org/w+1/conv+root".parse().unwrap();
-        let live = engine.open_wavelet(&name).unwrap();
+        let live = engine.open_wavelet(&name).await.unwrap();
 
         // Two independent client docs edit concurrently.
         let a = Doc::new();
         let b = Doc::new();
         engine
             .apply_update(&live, text_update(&a, "hello "), 1)
+            .await
             .unwrap();
         engine
             .apply_update(&live, text_update(&b, "world"), 2)
+            .await
             .unwrap();
 
         // A fresh client syncs from empty and sees both edits.
@@ -235,7 +287,7 @@ mod tests {
         // Reopen from disk (fresh engine): same state (durability, NFR-22).
         let store = Arc::new(FileStore::open(dir.path(), false).unwrap());
         let engine2 = Engine::new(store);
-        let live2 = engine2.open_wavelet(&name).unwrap();
+        let live2 = engine2.open_wavelet(&name).await.unwrap();
         let (_sv2, diff2) = live2.sync_state(&[]).unwrap();
         let d = Doc::new();
         d.transact_mut()
@@ -248,15 +300,16 @@ mod tests {
         assert_eq!(restored, merged);
     }
 
-    #[test]
-    fn stale_client_gets_only_missing_diff() {
+    #[tokio::test]
+    async fn stale_client_gets_only_missing_diff() {
         let (_g, engine) = engine();
         let name: WaveletName = "example.org/w+2/conv+root".parse().unwrap();
-        let live = engine.open_wavelet(&name).unwrap();
+        let live = engine.open_wavelet(&name).await.unwrap();
 
         let a = Doc::new();
         engine
             .apply_update(&live, text_update(&a, "one"), 1)
+            .await
             .unwrap();
 
         // Client that already has "one" hands over its state vector...
@@ -268,6 +321,7 @@ mod tests {
 
         engine
             .apply_update(&live, text_update(&a, " two"), 1)
+            .await
             .unwrap();
 
         // ...and receives a diff containing only " two".
@@ -278,5 +332,19 @@ mod tests {
         let t = client.get_or_insert_text("t");
         let txn = client.transact();
         assert_eq!(t.get_string(&txn), "one two");
+    }
+
+    #[tokio::test]
+    async fn change_stream_fires_on_update() {
+        let (_g, engine) = engine();
+        let mut rx = engine.change_stream();
+        let name: WaveletName = "example.org/w+3/conv+root".parse().unwrap();
+        let live = engine.open_wavelet(&name).await.unwrap();
+        let a = Doc::new();
+        engine
+            .apply_update(&live, text_update(&a, "ping"), 1)
+            .await
+            .unwrap();
+        assert_eq!(rx.recv().await.unwrap(), name);
     }
 }

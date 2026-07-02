@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   DialogClose,
@@ -12,6 +12,7 @@ import {
 } from 'reka-ui'
 import { useSession } from '../stores/session'
 import { useWaves } from '../stores/waves'
+import { api, type SearchHit } from '../lib/api'
 import { localPart } from '../lib/wavemodel'
 import TideLine from '../components/TideLine.vue'
 
@@ -22,8 +23,28 @@ const router = useRouter()
 const newTitle = ref('')
 const dialogOpen = ref(false)
 const creating = ref(false)
+const query = ref('')
+const hits = ref<SearchHit[] | null>(null)
+const searching = ref(false)
+let searchTimer: ReturnType<typeof setTimeout> | null = null
 
 onMounted(() => waves.refresh())
+
+watch(query, (q) => {
+  if (searchTimer) clearTimeout(searchTimer)
+  if (!q.trim()) {
+    hits.value = null
+    return
+  }
+  searchTimer = setTimeout(async () => {
+    searching.value = true
+    try {
+      hits.value = await api.search(q)
+    } finally {
+      searching.value = false
+    }
+  }, 250)
+})
 
 async function createWave() {
   const title = newTitle.value.trim()
@@ -62,7 +83,7 @@ function relative(ms: number): string {
     <header class="masthead reveal">
       <div>
         <h1 class="wordmark">protowave</h1>
-        <TideLine class="rule" />
+        <TideLine class="rule" :active="searching" />
       </div>
       <div class="helm">
         <span class="addr"
@@ -73,7 +94,40 @@ function relative(ms: number): string {
       </div>
     </header>
 
-    <section class="log">
+    <div class="soundings reveal" style="animation-delay: 0.03s">
+      <input
+        v-model="query"
+        class="text-input"
+        type="search"
+        placeholder="search the waves…"
+        aria-label="search waves"
+      />
+    </div>
+
+    <section v-if="hits !== null" class="log">
+      <div class="log-head">
+        <h2>soundings for “{{ query }}”</h2>
+        <button class="btn" @click="query = ''">clear</button>
+      </div>
+      <p v-if="hits.length === 0" class="becalmed">Nothing on the sonar.</p>
+      <ol class="wave-list">
+        <li
+          v-for="(hit, i) in hits"
+          :key="hit.wave"
+          class="wave-card reveal"
+          :style="{ animationDelay: `${i * 0.04}s` }"
+          @click="openWave(hit.wave)"
+        >
+          <div class="wave-main">
+            <h3 class="wave-title">{{ hit.title }}</h3>
+            <!-- eslint-disable-next-line vue/no-v-html — tantivy snippet, <b> tags only -->
+            <p class="wave-crew snippet" v-html="hit.snippet" />
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <section v-else class="log">
       <div class="log-head reveal" style="animation-delay: 0.05s">
         <h2>the log</h2>
 
@@ -118,11 +172,15 @@ function relative(ms: number): string {
           v-for="(w, i) in waves.list"
           :key="w.wave"
           class="wave-card reveal"
+          :class="{ unread: w.unread }"
           :style="{ animationDelay: `${0.08 + i * 0.045}s` }"
           @click="openWave(w.wave)"
         >
           <div class="wave-main">
-            <h3 class="wave-title">{{ w.title }}</h3>
+            <h3 class="wave-title">
+              <span v-if="w.unread" class="unread-buoy" title="new activity" />
+              {{ w.title }}
+            </h3>
             <p class="wave-crew mono">
               {{ w.participants.map(localPart).join(' · ') }}
             </p>
@@ -146,7 +204,7 @@ function relative(ms: number): string {
   align-items: flex-end;
   justify-content: space-between;
   gap: 1rem;
-  margin-bottom: 2.6rem;
+  margin-bottom: 1.6rem;
 }
 
 .wordmark {
@@ -164,6 +222,16 @@ function relative(ms: number): string {
   display: flex;
   align-items: center;
   gap: 0.9rem;
+}
+
+.soundings {
+  margin-bottom: 2rem;
+}
+
+.soundings input {
+  width: 100%;
+  font-size: 1rem;
+  padding: 0.65rem 0.9rem;
 }
 
 .log-head {
@@ -221,6 +289,22 @@ function relative(ms: number): string {
   border-left-color: var(--coral);
 }
 
+.wave-card.unread {
+  border-left-color: var(--coral);
+  background: color-mix(in srgb, var(--coral-wash) 40%, #fff);
+}
+
+.unread-buoy {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--coral);
+  margin-right: 0.4rem;
+  vertical-align: 0.12em;
+  animation: ripple 2.4s ease-out infinite;
+}
+
 .wave-title {
   font-size: 1.18rem;
   font-weight: 600;
@@ -231,6 +315,17 @@ function relative(ms: number): string {
   font-size: 0.72rem;
   letter-spacing: 0.04em;
   color: var(--ink-soft);
+}
+
+.snippet {
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.snippet :deep(b) {
+  color: var(--tide-deep);
+  font-style: normal;
 }
 
 .wave-time {

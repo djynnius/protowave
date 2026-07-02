@@ -21,7 +21,7 @@ prost-build = "=0.12.6"
 protox = "=0.6.0"
 thiserror = "=1.0.61"
 tokio = { version = "=1.36.0", features = ["full"] }
-axum = { version = "=0.7.5", features = ["ws"] }
+axum = { version = "=0.7.5", features = ["ws", "multipart"] }
 ed25519-dalek = { version = "=2.1.1", features = ["rand_core"] }
 curve25519-dalek = "=4.1.3"
 rand = "=0.8.5"
@@ -35,3 +35,11 @@ argon2 = "=0.5.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "=3.10.1"
+async-trait = "=0.1.77"
+blake3 = "=1.5.1"
+# mmap only: the lz4/zstd docstore codecs pull crates that no longer build
+# on rustc 1.75 (lz4_flex 0.11.x yanked; zstd-safe/zstd-sys pairing).
+tantivy = { version = "=0.21.1", default-features = false, features = ["mmap"] }
+tokio-postgres = { version = "=0.7.10", features = ["with-serde_json-1"] }
+deadpool-postgres = "=0.12.1"
+tower-http = { version = "=0.5.2", features = ["fs"] }

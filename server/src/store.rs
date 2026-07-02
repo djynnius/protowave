@@ -1,10 +1,10 @@
 //! Persistence layer (PRD §7 storage).
 //!
 //! `WaveStore` is the pluggable persistence trait (successor of legacy
-//! Wave's file/memory/MongoDB stores). Phase 1 ships the file-backed
-//! implementation: append-only length-prefixed update logs per wavelet plus
-//! JSON tables for accounts, sessions and the wave index. RocksDB/PostgreSQL
-//! implement the same trait later without touching the engine.
+//! Wave's file/memory/MongoDB stores). Implementations: `FileStore`
+//! (embedded, default) and `PgStore` (PostgreSQL, `store_pg`). Attachment
+//! *blobs* are not here — they live in the filesystem CAS (`cas.rs`); the
+//! store only holds their metadata.
 
 use std::collections::HashMap;
 use std::fs;
@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use protowave_core::{ParticipantId, WaveletName};
@@ -43,6 +44,19 @@ pub struct WaveMeta {
     pub last_activity_ms: u64,
 }
 
+/// Attachment metadata (FR-37). The blob itself lives in the CAS keyed by
+/// `hash` (BLAKE3 hex); identical content dedups automatically (FR-36).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentMeta {
+    pub hash: String,
+    pub wave: String,
+    pub name: String,
+    pub mime: String,
+    pub size: u64,
+    pub uploader: String,
+    pub created_ms: u64,
+}
+
 /// A wavelet's persisted state: latest snapshot (if any) plus the update
 /// log tail not yet covered by it. Open cost is O(snapshot) + O(tail)
 /// (NFR-C3); the log itself is never truncated (NFR-9).
@@ -52,11 +66,14 @@ pub struct WaveletRecord {
     pub total_updates: u64,
 }
 
+#[async_trait]
 pub trait WaveStore: Send + Sync + 'static {
     // Wavelet update logs (append-only; NFR-9).
-    fn append_update(&self, wavelet: &WaveletName, update: &[u8]) -> io::Result<u64>;
-    fn load_wavelet(&self, wavelet: &WaveletName) -> io::Result<WaveletRecord>;
-    fn save_snapshot(
+    async fn append_update(&self, wavelet: &WaveletName, update: &[u8]) -> io::Result<u64>;
+    async fn load_wavelet(&self, wavelet: &WaveletName) -> io::Result<WaveletRecord>;
+    /// The full log from the beginning — playback (FR-25..26).
+    async fn read_all_updates(&self, wavelet: &WaveletName) -> io::Result<Vec<Vec<u8>>>;
+    async fn save_snapshot(
         &self,
         wavelet: &WaveletName,
         snapshot: &[u8],
@@ -65,20 +82,34 @@ pub trait WaveStore: Send + Sync + 'static {
 
     // Accounts.
     /// Returns false (without writing) when the account already exists.
-    fn create_account(&self, account: &Account) -> io::Result<bool>;
-    fn get_account(&self, participant: &ParticipantId) -> io::Result<Option<Account>>;
+    async fn create_account(&self, account: &Account) -> io::Result<bool>;
+    async fn get_account(&self, participant: &ParticipantId) -> io::Result<Option<Account>>;
 
     // Sessions.
-    fn put_session(&self, session_id: &str, participant: &ParticipantId) -> io::Result<()>;
-    fn get_session(&self, session_id: &str) -> io::Result<Option<ParticipantId>>;
-    fn delete_session(&self, session_id: &str) -> io::Result<()>;
+    async fn put_session(&self, session_id: &str, participant: &ParticipantId) -> io::Result<()>;
+    async fn get_session(&self, session_id: &str) -> io::Result<Option<ParticipantId>>;
+    async fn delete_session(&self, session_id: &str) -> io::Result<()>;
 
     // Wave index.
-    fn put_wave(&self, meta: &WaveMeta) -> io::Result<()>;
-    fn get_wave(&self, wave: &str) -> io::Result<Option<WaveMeta>>;
+    async fn put_wave(&self, meta: &WaveMeta) -> io::Result<()>;
+    async fn get_wave(&self, wave: &str) -> io::Result<Option<WaveMeta>>;
     /// Waves the participant is on, most recently active first (FR-28).
-    fn list_waves_for(&self, participant: &ParticipantId) -> io::Result<Vec<WaveMeta>>;
-    fn touch_wave(&self, wave: &str, at_ms: u64) -> io::Result<()>;
+    async fn list_waves_for(&self, participant: &ParticipantId) -> io::Result<Vec<WaveMeta>>;
+    async fn touch_wave(&self, wave: &str, at_ms: u64) -> io::Result<()>;
+
+    // Per-user read marks (FR-8).
+    async fn set_read_mark(
+        &self,
+        participant: &ParticipantId,
+        wave: &str,
+        at_ms: u64,
+    ) -> io::Result<()>;
+    async fn read_marks(&self, participant: &ParticipantId) -> io::Result<HashMap<String, u64>>;
+
+    // Attachment metadata (FR-37).
+    async fn put_attachment(&self, meta: &AttachmentMeta) -> io::Result<()>;
+    async fn get_attachment(&self, hash: &str) -> io::Result<Option<AttachmentMeta>>;
+    async fn list_attachments(&self, wave: &str) -> io::Result<Vec<AttachmentMeta>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +121,10 @@ struct Tables {
     accounts: HashMap<String, Account>,
     sessions: HashMap<String, String>,
     waves: HashMap<String, WaveMeta>,
+    #[serde(default)]
+    read_marks: HashMap<String, HashMap<String, u64>>,
+    #[serde(default)]
+    attachments: HashMap<String, AttachmentMeta>,
 }
 
 pub struct FileStore {
@@ -162,8 +197,9 @@ impl FileStore {
     }
 }
 
+#[async_trait]
 impl WaveStore for FileStore {
-    fn append_update(&self, wavelet: &WaveletName, update: &[u8]) -> io::Result<u64> {
+    async fn append_update(&self, wavelet: &WaveletName, update: &[u8]) -> io::Result<u64> {
         let dir = self.wavelet_dir(wavelet);
         fs::create_dir_all(&dir)?;
         let mut f = fs::OpenOptions::new()
@@ -188,7 +224,7 @@ impl WaveStore for FileStore {
         Ok(count)
     }
 
-    fn load_wavelet(&self, wavelet: &WaveletName) -> io::Result<WaveletRecord> {
+    async fn load_wavelet(&self, wavelet: &WaveletName) -> io::Result<WaveletRecord> {
         let dir = self.wavelet_dir(wavelet);
         let updates = Self::read_log(&dir.join("log.bin"))?;
         let total_updates = updates.len() as u64;
@@ -207,7 +243,11 @@ impl WaveStore for FileStore {
         })
     }
 
-    fn save_snapshot(
+    async fn read_all_updates(&self, wavelet: &WaveletName) -> io::Result<Vec<Vec<u8>>> {
+        Self::read_log(&self.wavelet_dir(wavelet).join("log.bin"))
+    }
+
+    async fn save_snapshot(
         &self,
         wavelet: &WaveletName,
         snapshot: &[u8],
@@ -227,7 +267,7 @@ impl WaveStore for FileStore {
         fs::rename(tmp, dir.join("snapshot.bin"))
     }
 
-    fn create_account(&self, account: &Account) -> io::Result<bool> {
+    async fn create_account(&self, account: &Account) -> io::Result<bool> {
         let mut tables = self.tables.lock().unwrap();
         if tables.accounts.contains_key(&account.participant) {
             return Ok(false);
@@ -239,12 +279,12 @@ impl WaveStore for FileStore {
         Ok(true)
     }
 
-    fn get_account(&self, participant: &ParticipantId) -> io::Result<Option<Account>> {
+    async fn get_account(&self, participant: &ParticipantId) -> io::Result<Option<Account>> {
         let tables = self.tables.lock().unwrap();
         Ok(tables.accounts.get(&participant.to_string()).cloned())
     }
 
-    fn put_session(&self, session_id: &str, participant: &ParticipantId) -> io::Result<()> {
+    async fn put_session(&self, session_id: &str, participant: &ParticipantId) -> io::Result<()> {
         let mut tables = self.tables.lock().unwrap();
         tables
             .sessions
@@ -252,29 +292,29 @@ impl WaveStore for FileStore {
         self.flush_tables(&tables)
     }
 
-    fn get_session(&self, session_id: &str) -> io::Result<Option<ParticipantId>> {
+    async fn get_session(&self, session_id: &str) -> io::Result<Option<ParticipantId>> {
         let tables = self.tables.lock().unwrap();
         Ok(tables.sessions.get(session_id).and_then(|p| p.parse().ok()))
     }
 
-    fn delete_session(&self, session_id: &str) -> io::Result<()> {
+    async fn delete_session(&self, session_id: &str) -> io::Result<()> {
         let mut tables = self.tables.lock().unwrap();
         tables.sessions.remove(session_id);
         self.flush_tables(&tables)
     }
 
-    fn put_wave(&self, meta: &WaveMeta) -> io::Result<()> {
+    async fn put_wave(&self, meta: &WaveMeta) -> io::Result<()> {
         let mut tables = self.tables.lock().unwrap();
         tables.waves.insert(meta.wave.clone(), meta.clone());
         self.flush_tables(&tables)
     }
 
-    fn get_wave(&self, wave: &str) -> io::Result<Option<WaveMeta>> {
+    async fn get_wave(&self, wave: &str) -> io::Result<Option<WaveMeta>> {
         let tables = self.tables.lock().unwrap();
         Ok(tables.waves.get(wave).cloned())
     }
 
-    fn list_waves_for(&self, participant: &ParticipantId) -> io::Result<Vec<WaveMeta>> {
+    async fn list_waves_for(&self, participant: &ParticipantId) -> io::Result<Vec<WaveMeta>> {
         let tables = self.tables.lock().unwrap();
         let me = participant.to_string();
         let mut waves: Vec<WaveMeta> = tables
@@ -287,7 +327,7 @@ impl WaveStore for FileStore {
         Ok(waves)
     }
 
-    fn touch_wave(&self, wave: &str, at_ms: u64) -> io::Result<()> {
+    async fn touch_wave(&self, wave: &str, at_ms: u64) -> io::Result<()> {
         let mut tables = self.tables.lock().unwrap();
         if let Some(meta) = tables.waves.get_mut(wave) {
             if at_ms > meta.last_activity_ms {
@@ -296,6 +336,53 @@ impl WaveStore for FileStore {
             }
         }
         Ok(())
+    }
+
+    async fn set_read_mark(
+        &self,
+        participant: &ParticipantId,
+        wave: &str,
+        at_ms: u64,
+    ) -> io::Result<()> {
+        let mut tables = self.tables.lock().unwrap();
+        tables
+            .read_marks
+            .entry(participant.to_string())
+            .or_default()
+            .insert(wave.to_string(), at_ms);
+        self.flush_tables(&tables)
+    }
+
+    async fn read_marks(&self, participant: &ParticipantId) -> io::Result<HashMap<String, u64>> {
+        let tables = self.tables.lock().unwrap();
+        Ok(tables
+            .read_marks
+            .get(&participant.to_string())
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn put_attachment(&self, meta: &AttachmentMeta) -> io::Result<()> {
+        let mut tables = self.tables.lock().unwrap();
+        tables.attachments.insert(meta.hash.clone(), meta.clone());
+        self.flush_tables(&tables)
+    }
+
+    async fn get_attachment(&self, hash: &str) -> io::Result<Option<AttachmentMeta>> {
+        let tables = self.tables.lock().unwrap();
+        Ok(tables.attachments.get(hash).cloned())
+    }
+
+    async fn list_attachments(&self, wave: &str) -> io::Result<Vec<AttachmentMeta>> {
+        let tables = self.tables.lock().unwrap();
+        let mut out: Vec<AttachmentMeta> = tables
+            .attachments
+            .values()
+            .filter(|a| a.wave == wave)
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| b.created_ms.cmp(&a.created_ms));
+        Ok(out)
     }
 }
 
@@ -309,23 +396,28 @@ mod tests {
         (dir, store)
     }
 
-    #[test]
-    fn update_log_roundtrip_and_snapshot_tail() {
+    #[tokio::test]
+    async fn update_log_roundtrip_and_snapshot_tail() {
         let (_g, store) = tmp_store();
         let name: WaveletName = "example.org/w+1/conv+root".parse().unwrap();
-        assert_eq!(store.append_update(&name, b"u1").unwrap(), 1);
-        assert_eq!(store.append_update(&name, b"u2").unwrap(), 2);
-        store.save_snapshot(&name, b"snap-at-2", 2).unwrap();
-        assert_eq!(store.append_update(&name, b"u3").unwrap(), 3);
+        assert_eq!(store.append_update(&name, b"u1").await.unwrap(), 1);
+        assert_eq!(store.append_update(&name, b"u2").await.unwrap(), 2);
+        store.save_snapshot(&name, b"snap-at-2", 2).await.unwrap();
+        assert_eq!(store.append_update(&name, b"u3").await.unwrap(), 3);
 
-        let rec = store.load_wavelet(&name).unwrap();
+        let rec = store.load_wavelet(&name).await.unwrap();
         assert_eq!(rec.snapshot.as_deref(), Some(&b"snap-at-2"[..]));
         assert_eq!(rec.tail, vec![b"u3".to_vec()]);
         assert_eq!(rec.total_updates, 3);
+
+        // Playback reads the full log regardless of snapshots (FR-26).
+        let all = store.read_all_updates(&name).await.unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0], b"u1");
     }
 
-    #[test]
-    fn accounts_sessions_waves() {
+    #[tokio::test]
+    async fn accounts_sessions_waves_marks_attachments() {
         let (_g, store) = tmp_store();
         let ada: ParticipantId = "ada@example.org".parse().unwrap();
         let acct = Account {
@@ -333,14 +425,14 @@ mod tests {
             password_hash: "phc".into(),
             created_ms: 1,
         };
-        assert!(store.create_account(&acct).unwrap());
-        assert!(!store.create_account(&acct).unwrap());
-        assert!(store.get_account(&ada).unwrap().is_some());
+        assert!(store.create_account(&acct).await.unwrap());
+        assert!(!store.create_account(&acct).await.unwrap());
+        assert!(store.get_account(&ada).await.unwrap().is_some());
 
-        store.put_session("sid1", &ada).unwrap();
-        assert_eq!(store.get_session("sid1").unwrap(), Some(ada.clone()));
-        store.delete_session("sid1").unwrap();
-        assert_eq!(store.get_session("sid1").unwrap(), None);
+        store.put_session("sid1", &ada).await.unwrap();
+        assert_eq!(store.get_session("sid1").await.unwrap(), Some(ada.clone()));
+        store.delete_session("sid1").await.unwrap();
+        assert_eq!(store.get_session("sid1").await.unwrap(), None);
 
         for (i, wave) in ["example.org/w+a", "example.org/w+b"].iter().enumerate() {
             store
@@ -352,11 +444,42 @@ mod tests {
                     created_ms: i as u64,
                     last_activity_ms: i as u64,
                 })
+                .await
                 .unwrap();
         }
-        store.touch_wave("example.org/w+a", 99).unwrap();
-        let list = store.list_waves_for(&ada).unwrap();
+        store.touch_wave("example.org/w+a", 99).await.unwrap();
+        let list = store.list_waves_for(&ada).await.unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].wave, "example.org/w+a"); // most recent first
+
+        store
+            .set_read_mark(&ada, "example.org/w+a", 50)
+            .await
+            .unwrap();
+        let marks = store.read_marks(&ada).await.unwrap();
+        assert_eq!(marks.get("example.org/w+a"), Some(&50));
+
+        let att = AttachmentMeta {
+            hash: "abc123".into(),
+            wave: "example.org/w+a".into(),
+            name: "notes.md".into(),
+            mime: "text/markdown".into(),
+            size: 42,
+            uploader: ada.to_string(),
+            created_ms: 7,
+        };
+        store.put_attachment(&att).await.unwrap();
+        assert_eq!(
+            store.get_attachment("abc123").await.unwrap().unwrap().name,
+            "notes.md"
+        );
+        assert_eq!(
+            store
+                .list_attachments("example.org/w+a")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }
