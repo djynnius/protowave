@@ -87,6 +87,10 @@ file store), `PROTOWAVE_WEB_DIST` (SPA dir; server serves it when present).
   2.35 < container 2.39, so host binaries run), `lxc file push`, restart.
   Gotcha: quote `Environment="PROTOWAVE_PG=..."` in the unit — the conn
   string has spaces.
+- LXC container **protowave2** (`10.102.109.126`): second federation node,
+  domain `protowave2.local`, file-backed store, port 80, host proxy
+  **:9797 → container :80**. The two nodes federate via `PROTOWAVE_PEERS`
+  pointing at each other's container IPs.
 - LXC container **postgres** (`10.102.109.186`): Postgres 16, role
   `protowave` / `protowave-dev`, DBs `protowave` (prod) and
   `protowave_test` (tests).
