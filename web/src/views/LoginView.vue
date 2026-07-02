@@ -4,7 +4,9 @@ import { useRouter, useRoute } from 'vue-router'
 import { useSession } from '../stores/session'
 import { ApiError } from '../lib/api'
 import WaveMesh from '../components/WaveMesh.vue'
+import { useI18n } from 'vue-i18n'
 
+const { t } = useI18n()
 const session = useSession()
 const router = useRouter()
 const route = useRoute()
@@ -27,7 +29,7 @@ async function submit() {
     }
     router.push((route.query.next as string) ?? '/')
   } catch (e) {
-    error.value = e instanceof ApiError ? e.message : 'something went wrong — try again'
+    error.value = e instanceof ApiError ? e.message : t('genericError')
   } finally {
     busy.value = false
   }
@@ -39,7 +41,7 @@ async function submit() {
     <section class="card reveal">
       <WaveMesh variant="mark" class="mark" :active="busy" :width="320" />
       <h1 class="wordmark brand">Proto<em>Wave</em></h1>
-      <p class="tagline">Collaboration without boundaries.</p>
+      <p class="tagline">{{ t('tagline') }}</p>
 
       <div class="mode-switch" role="tablist">
         <button
@@ -48,7 +50,7 @@ async function submit() {
           :class="{ on: mode === 'login' }"
           @click="mode = 'login'"
         >
-          Sign in
+          {{ t('signIn') }}
         </button>
         <button
           role="tab"
@@ -56,13 +58,13 @@ async function submit() {
           :class="{ on: mode === 'register' }"
           @click="mode = 'register'"
         >
-          Create account
+          {{ t('createAccount') }}
         </button>
       </div>
 
       <form @submit.prevent="submit">
         <label class="field">
-          <span class="field-label">Name</span>
+          <span class="field-label">{{ t('name') }}</span>
           <input
             v-model.trim="name"
             class="text-input"
@@ -72,7 +74,7 @@ async function submit() {
           />
         </label>
         <label class="field">
-          <span class="field-label">Passphrase</span>
+          <span class="field-label">{{ t('passphrase') }}</span>
           <input
             v-model="password"
             class="text-input"
@@ -83,7 +85,7 @@ async function submit() {
         </label>
         <p v-if="error" class="error-note">{{ error }}</p>
         <button class="btn btn-tide submit" :disabled="busy">
-          {{ mode === 'login' ? 'Start a wave' : 'Create account & dive in' }}
+          {{ mode === 'login' ? t('startWave') : t('registerCta') }}
         </button>
       </form>
 

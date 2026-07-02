@@ -39,7 +39,14 @@ npm run build          # type-check + production build
 
 ## Status
 
-**Phase 5 (Distributed folder sharing)** — waves now carry shared folders:
+**Phase 6 (Public beta readiness) — the PRD's v1 roadmap is complete.**
+ProtoWave is now an installable PWA with an offline shell, localized into
+seven languages (en/de/es/fr/ru/zh-TW/sl), rate-limited against abuse, and
+extensible: waves can host sandboxed collaborative apps — the successor of
+Wave's gadgets — sharing live CRDT state through a postMessage bridge
+(sample: /extensions/tally.html).
+
+Previously — **Phase 5 (Distributed folder sharing)** — waves now carry shared folders:
 content-defined chunks (FastCDC) in the BLAKE3 store, byte-verified on
 every transfer, fetched from any federated server that holds them (origin
 first, mirrors next) and pinnable locally ("mirror here") so shares

@@ -10,14 +10,21 @@ import {
   DialogTitle,
   DialogTrigger,
 } from 'reka-ui'
+import { useI18n } from 'vue-i18n'
 import { socket, WaveletProvider } from '../lib/provider'
 import { useSession } from '../stores/session'
 import { useWaves } from '../stores/waves'
 import { api, type AttachmentMeta, type ShareMeta } from '../lib/api'
 import {
+  addExtension,
   addReply,
   blips,
   ensureRootBlip,
+  extensions,
+  extensionState,
+  listExtensions,
+  removeExtension,
+  type ExtensionEntry,
   localPart,
   manifest,
   participantColor,
@@ -29,7 +36,9 @@ import BlipEditor from '../components/BlipEditor.vue'
 import AttachmentCard from '../components/AttachmentCard.vue'
 import FolderShareCard from '../components/FolderShareCard.vue'
 import PlaybackDrawer from '../components/PlaybackDrawer.vue'
+import ExtensionFrame from '../components/ExtensionFrame.vue'
 
+const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const session = useSession()
@@ -76,6 +85,20 @@ async function enableTranslation() {
   if (translationLang.value) applyTranslationLang()
 }
 const showDocuments = ref(false)
+const waveApps = ref<ExtensionEntry[]>([])
+const addAppOpen = ref(false)
+const appUrl = ref('/extensions/tally.html')
+
+function readExtensions() {
+  waveApps.value = listExtensions(provider.doc)
+}
+
+function addApp() {
+  const url = appUrl.value.trim()
+  if (!url) return
+  addExtension(provider.doc, url)
+  addAppOpen.value = false
+}
 const uploading = ref(false)
 const addOpen = ref(false)
 const addName = ref('')
@@ -143,8 +166,10 @@ function onShareMirrored(updated: ShareMeta) {
 onMounted(async () => {
   if (!digest.value) await waves.refresh()
   manifest(provider.doc).observe(readManifest)
+  extensions(provider.doc).observe(readExtensions)
   provider.awareness.on('change', readPresence)
   readManifest()
+  readExtensions()
   readPresence()
   refreshAttachments()
   // Resume the reader's preferred language on waves that opted in.
@@ -158,6 +183,7 @@ onBeforeUnmount(() => {
   stopSync()
   api.markRead(waveId).catch(() => {})
   manifest(provider.doc).unobserve(readManifest)
+  extensions(provider.doc).unobserve(readExtensions)
   provider.awareness.off('change', readPresence)
   provider.destroy()
 })
@@ -180,7 +206,7 @@ async function addParticipant() {
     addOpen.value = false
     addName.value = ''
   } catch (e) {
-    addError.value = e instanceof Error ? e.message : 'could not add'
+    addError.value = e instanceof Error ? e.message : t('couldNotAdd')
   }
 }
 
@@ -203,7 +229,7 @@ async function uploadFile(event: Event) {
 <template>
   <main class="deck">
     <header class="bridge reveal">
-      <button class="btn back" @click="router.push({ name: 'inbox' })">← the log</button>
+      <button class="btn back" @click="router.push({ name: 'inbox' })">{{ t('back') }}</button>
 
       <div class="crew">
         <span
@@ -217,10 +243,10 @@ async function uploadFile(event: Event) {
         </span>
 
         <button class="btn" :data-on="showPlayback || undefined" @click="showPlayback = !showPlayback">
-          ↺ replay
+          {{ t('replay') }}
         </button>
         <button class="btn" :data-on="showDocuments || undefined" @click="showDocuments = !showDocuments">
-          ⛁ files<template v-if="attachments.length"> ({{ attachments.length }})</template>
+          {{ t('files') }}<template v-if="attachments.length"> ({{ attachments.length }})</template>
         </button>
 
         <select
@@ -230,57 +256,76 @@ async function uploadFile(event: Event) {
           title="read this wave in…"
           @change="applyTranslationLang"
         >
-          <option value="">original</option>
+          <option value="">{{ t('original') }}</option>
           <option v-for="[code, label] in LANGUAGES" :key="code" :value="code">
             ≈ {{ label }}
           </option>
         </select>
         <DialogRoot v-else v-model:open="enableTranslationOpen">
           <DialogTrigger as-child>
-            <button class="btn">≈ translation</button>
+            <button class="btn">{{ t('translation') }}</button>
           </DialogTrigger>
           <DialogPortal>
             <DialogOverlay class="dialog-overlay" />
             <DialogContent class="dialog-content">
-              <DialogTitle class="dialog-title">Enable live translation?</DialogTitle>
-              <p class="disclosure">
-                When translation is on, the text of this wave is sent to a
-                third-party model API (Google Gemini) to produce translations
-                for participants reading in other languages. Translations are
-                overlays — the original text is always what's stored, and
-                every reader can switch back to it at any time.
-              </p>
+              <DialogTitle class="dialog-title">{{ t('enableTranslationTitle') }}</DialogTitle>
+              <p class="disclosure">{{ t('translationDisclosure') }}</p>
               <div class="dialog-actions">
                 <DialogClose as-child>
-                  <button type="button" class="btn">not now</button>
+                  <button type="button" class="btn">{{ t('notNow') }}</button>
                 </DialogClose>
                 <button type="button" class="btn btn-tide" @click="enableTranslation">
-                  enable for this wave
+                  {{ t('enableForWave') }}
                 </button>
               </div>
             </DialogContent>
           </DialogPortal>
         </DialogRoot>
 
-        <DialogRoot v-model:open="addOpen">
+        <DialogRoot v-model:open="addAppOpen">
           <DialogTrigger as-child>
-            <button class="btn">+ crew</button>
+            <button class="btn">{{ t('addApp') }}</button>
           </DialogTrigger>
           <DialogPortal>
             <DialogOverlay class="dialog-overlay" />
             <DialogContent class="dialog-content">
-              <DialogTitle class="dialog-title">Add to the wave</DialogTitle>
+              <DialogTitle class="dialog-title">{{ t('addAppTitle') }}</DialogTitle>
+              <p class="disclosure">{{ t('appDisclosure') }}</p>
+              <form @submit.prevent="addApp">
+                <label class="field">
+                  <span class="field-label">{{ t('appUrl') }}</span>
+                  <input v-model="appUrl" class="text-input mono" />
+                </label>
+                <div class="dialog-actions">
+                  <DialogClose as-child>
+                    <button type="button" class="btn">{{ t('cancel') }}</button>
+                  </DialogClose>
+                  <button type="submit" class="btn btn-tide">{{ t('add') }}</button>
+                </div>
+              </form>
+            </DialogContent>
+          </DialogPortal>
+        </DialogRoot>
+
+        <DialogRoot v-model:open="addOpen">
+          <DialogTrigger as-child>
+            <button class="btn">{{ t('addCrew') }}</button>
+          </DialogTrigger>
+          <DialogPortal>
+            <DialogOverlay class="dialog-overlay" />
+            <DialogContent class="dialog-content">
+              <DialogTitle class="dialog-title">{{ t('addToWave') }}</DialogTitle>
               <form @submit.prevent="addParticipant">
                 <label class="field">
-                  <span class="field-label">name or address</span>
+                  <span class="field-label">{{ t('nameOrAddress') }}</span>
                   <input v-model="addName" class="text-input" placeholder="bob" autofocus />
                 </label>
                 <p v-if="addError" class="error-note">{{ addError }}</p>
                 <div class="dialog-actions">
                   <DialogClose as-child>
-                    <button type="button" class="btn">cancel</button>
+                    <button type="button" class="btn">{{ t('cancel') }}</button>
                   </DialogClose>
-                  <button type="submit" class="btn btn-tide">add</button>
+                  <button type="submit" class="btn btn-tide">{{ t('add') }}</button>
                 </div>
               </form>
             </DialogContent>
@@ -307,14 +352,14 @@ async function uploadFile(event: Event) {
 
       <aside v-if="showDocuments" class="documents">
         <div class="documents-head">
-          <h2>shared files</h2>
+          <h2>{{ t('sharedFiles') }}</h2>
           <span class="doc-actions">
             <label class="btn" :aria-busy="uploading">
-              {{ uploading ? 'uploading…' : '+ file' }}
+              {{ uploading ? t('uploading') : t('shareFile') }}
               <input ref="fileInput" type="file" hidden :disabled="uploading" @change="uploadFile" />
             </label>
             <label class="btn" :aria-busy="sharingFolder">
-              {{ sharingFolder ? 'chunking…' : '▤ share a folder' }}
+              {{ sharingFolder ? t('chunking') : t('shareFolder') }}
               <input
                 ref="folderInput"
                 type="file"
@@ -328,7 +373,7 @@ async function uploadFile(event: Event) {
           </span>
         </div>
         <p v-if="attachments.length === 0 && shares.length === 0" class="mono no-files">
-          nothing shared yet
+          {{ t('nothingShared') }}
         </p>
         <div v-if="shares.length" class="documents-grid shares-grid">
           <FolderShareCard
@@ -350,6 +395,19 @@ async function uploadFile(event: Event) {
           />
         </div>
       </aside>
+
+      <div v-if="waveApps.length" class="wave-apps">
+        <ExtensionFrame
+          v-for="ext in waveApps"
+          :key="ext.id"
+          v-show="extensionState(provider.doc, ext.id)"
+          :id="ext.id"
+          :url="ext.url"
+          :state="extensionState(provider.doc, ext.id)!"
+          :me="me"
+          @remove="removeExtension(provider.doc, $event)"
+        />
+      </div>
 
       <div class="thread">
         <BlipEditor
@@ -495,6 +553,13 @@ async function uploadFile(event: Event) {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
   gap: 0.6rem;
+}
+
+.wave-apps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 0.8rem;
+  margin-bottom: 1.4rem;
 }
 
 .thread {

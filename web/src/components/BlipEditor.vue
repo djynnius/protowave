@@ -9,7 +9,10 @@ import Collaboration from '@tiptap/extension-collaboration'
 import CollaborationCursor from '@tiptap/extension-collaboration-cursor'
 import type * as Y from 'yjs'
 import type { WaveletProvider } from '../lib/provider'
+import { useI18n } from 'vue-i18n'
 import { localPart, participantColor, type BlipEntry } from '../lib/wavemodel'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   entry: BlipEntry
@@ -57,10 +60,10 @@ function timeOf(ts: number): string {
       </header>
       <EditorContent :editor="editor" class="blip-editor" />
       <div v-if="translation" class="translation">
-        <span class="tag tag-dusk">✓ translated</span>
+        <span class="tag tag-dusk">{{ t('translated') }}</span>
         <p>{{ translation }}</p>
       </div>
-      <button class="reply" @click="emit('reply', entry.id)">↳ Reply</button>
+      <button class="reply" @click="emit('reply', entry.id)">{{ t('reply') }}</button>
     </div>
   </article>
 </template>

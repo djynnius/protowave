@@ -10,7 +10,10 @@ import {
   DialogTitle,
 } from 'reka-ui'
 import { renderMarkdown, highlightCodeBlocks } from '../lib/markdown'
+import { useI18n } from 'vue-i18n'
 import { localPart } from '../lib/wavemodel'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   hash: string
@@ -54,8 +57,8 @@ async function openMarkdown() {
       <span class="name">{{ name }}</span>
       <span class="meta mono">{{ prettySize(size) }} · {{ localPart(uploader) }}</span>
       <span class="actions">
-        <button v-if="isMarkdown" class="linkish mono" @click="openMarkdown">view</button>
-        <a class="linkish mono" :href="url" :download="name">download</a>
+        <button v-if="isMarkdown" class="linkish mono" @click="openMarkdown">{{ t('view') }}</button>
+        <a class="linkish mono" :href="url" :download="name">{{ t('download') }}</a>
       </span>
     </div>
 

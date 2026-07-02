@@ -1,0 +1,23 @@
+{
+  "name": "ProtoWave",
+  "short_name": "ProtoWave",
+  "description": "Collaboration without boundaries — living shared spaces where distance and language melt away.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F6F9FD",
+  "theme_color": "#2E6BF0",
+  "icons": [
+    {
+      "src": "/pw-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/pw-icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ pub mod auth;
 pub mod cas;
 pub mod engine;
 pub mod federation;
+pub mod limits;
 pub mod search;
 pub mod shares;
 pub mod store;
@@ -37,6 +38,7 @@ pub struct AppState {
     pub search: Arc<dyn SearchIndex>,
     pub federation: Federation,
     pub translation: translate::TranslationHub,
+    pub limits: limits::RateLimiter,
     /// This server's federation domain (PRD §8.2).
     pub domain: String,
 }
@@ -62,6 +64,7 @@ impl AppState {
             search: Arc::new(TantivyIndex::open(&data_dir.join("search"))?),
             federation: Federation::new(fed_config, data_dir)?,
             translation: translate::TranslationHub::new(call_cap),
+            limits: limits::RateLimiter::default(),
             domain: domain.into(),
         });
         // Gemini Flash-Lite-class reference provider (FR-46); swap via env.
@@ -151,6 +154,7 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route("/api/waves/participants", post(api::add_participant))
         .route("/api/waves/read", post(api::mark_read))
         .route("/api/waves/translation", post(api::set_translation))
+        .route("/api/admin/stats", get(limits::admin_stats))
         .route("/api/history", get(api::history))
         .route("/api/search", get(api::search))
         .route(

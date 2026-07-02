@@ -24,7 +24,14 @@ budgets (NFR-Cx), architecture decisions (ADR-1..5), and the phase roadmap
   BLAKE3 verification, share announcements, mirroring. v0 transport is the
   signed federation HTTP channel — iroh/QUIC deferred (does not build on
   rustc 1.75), architecture is transport-agnostic.
-- **Phase 6 (polish: PWA, i18n, extension API, anti-abuse) is next**.
+- **Phase 6 complete — v1 roadmap done (public beta ready)**: PWA
+  (manifest + hand-rolled sw.js in `web/public/`, network-first shell),
+  i18n ×7 locales (`web/src/i18n.ts`, NFR-20), rate limiting
+  (`server/src/limits.rs`, FR-63; per-IP on auth via optional ConnectInfo,
+  per-user on wave ops), admin stats endpoint (PROTOWAVE_ADMIN env), and
+  the **extension host** (`web/src/components/ExtensionFrame.vue`):
+  sandboxed iframes + postMessage bridge to a collaborative Y.Map —
+  Wave's gadget successor; sample app `web/public/extensions/tally.html`.
 - Deferred: OIDC login (FR-3), in-text anchored inline replies (FR-19),
   participant *removal* + federated blob fetch for attachments, gRPC/TLS
   transport for federation.

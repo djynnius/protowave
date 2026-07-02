@@ -74,6 +74,48 @@ export function threadOrder(entries: BlipEntry[]): BlipNode[] {
   return out
 }
 
+// ---- extensions: the gadget successor (Phase 6) ----
+// Each extension instance = { url, state: Y.Map } in the `extensions` map.
+// The state map is collaborative: every participant's frame sees the same
+// live object, exactly like Wave's gadget state.
+
+export interface ExtensionEntry {
+  id: string
+  url: string
+}
+
+export function extensions(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
+  return doc.getMap<Y.Map<unknown>>('extensions')
+}
+
+export function addExtension(doc: Y.Doc, url: string): string {
+  const id = `x+${Math.random().toString(36).slice(2, 10)}`
+  doc.transact(() => {
+    const inner = new Y.Map<unknown>()
+    inner.set('url', url)
+    inner.set('state', new Y.Map())
+    extensions(doc).set(id, inner)
+  })
+  return id
+}
+
+export function removeExtension(doc: Y.Doc, id: string) {
+  extensions(doc).delete(id)
+}
+
+export function listExtensions(doc: Y.Doc): ExtensionEntry[] {
+  const out: ExtensionEntry[] = []
+  extensions(doc).forEach((inner, id) => {
+    const url = inner.get('url')
+    if (typeof url === 'string') out.push({ id, url })
+  })
+  return out
+}
+
+export function extensionState(doc: Y.Doc, id: string): Y.Map<unknown> | undefined {
+  return extensions(doc).get(id)?.get('state') as Y.Map<unknown> | undefined
+}
+
 /// Deterministic collaborator color from a participant address —
 /// brand blues (crest → dusk) plus deep accents so avatars sit in harmony.
 const PALETTE = ['#2E6BF0', '#2DD4BF', '#818CF8', '#38BDF8', '#0F9D8A', '#5B63D6']

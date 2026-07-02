@@ -11,5 +11,10 @@ async fn main() {
         .unwrap_or_else(|e| panic!("cannot bind {addr}: {e}"));
     tracing::info!(%addr, domain = %state.domain, "protowave-server listening");
 
-    axum::serve(listener, app(state)).await.expect("server run");
+    axum::serve(
+        listener,
+        app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .expect("server run");
 }

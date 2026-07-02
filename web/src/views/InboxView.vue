@@ -15,7 +15,10 @@ import { useWaves } from '../stores/waves'
 import { api, type SearchHit } from '../lib/api'
 import { localPart } from '../lib/wavemodel'
 import WaveMesh from '../components/WaveMesh.vue'
+import { useI18n } from 'vue-i18n'
+import { LOCALES, setLocale } from '../i18n'
 
+const { t, locale } = useI18n()
 const session = useSession()
 const waves = useWaves()
 const router = useRouter()
@@ -71,10 +74,10 @@ async function signOut() {
 
 function relative(ms: number): string {
   const delta = Date.now() - ms
-  if (delta < 60_000) return 'just now'
-  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`
-  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h ago`
-  return `${Math.floor(delta / 86_400_000)}d ago`
+  if (delta < 60_000) return t('justNow')
+  if (delta < 3_600_000) return t('minutesAgo', { n: Math.floor(delta / 60_000) })
+  if (delta < 86_400_000) return t('hoursAgo', { n: Math.floor(delta / 3_600_000) })
+  return t('daysAgo', { n: Math.floor(delta / 86_400_000) })
 }
 </script>
 
@@ -90,7 +93,15 @@ function relative(ms: number): string {
           ><b>{{ localPart(session.participant ?? '') }}</b
           >@{{ (session.participant ?? '').split('@')[1] }}</span
         >
-        <button class="btn" @click="signOut">go ashore</button>
+        <select
+          class="locale-select mono"
+          :value="locale"
+          aria-label="language"
+          @change="setLocale(($event.target as HTMLSelectElement).value)"
+        >
+          <option v-for="[code, label] in LOCALES" :key="code" :value="code">{{ label }}</option>
+        </select>
+        <button class="btn" @click="signOut">{{ t('signOut') }}</button>
       </div>
     </header>
 
@@ -99,17 +110,17 @@ function relative(ms: number): string {
         v-model="query"
         class="text-input"
         type="search"
-        placeholder="search the waves…"
+        :placeholder="t('searchPlaceholder')"
         aria-label="search waves"
       />
     </div>
 
     <section v-if="hits !== null" class="log">
       <div class="log-head">
-        <h2>soundings for “{{ query }}”</h2>
-        <button class="btn" @click="query = ''">clear</button>
+        <h2>{{ t('resultsFor', { q: query }) }}</h2>
+        <button class="btn" @click="query = ''">{{ t('clear') }}</button>
       </div>
-      <p v-if="hits.length === 0" class="becalmed">Nothing on the sonar.</p>
+      <p v-if="hits.length === 0" class="becalmed">{{ t('noResults') }}</p>
       <ol class="wave-list">
         <li
           v-for="(hit, i) in hits"
@@ -129,32 +140,32 @@ function relative(ms: number): string {
 
     <section v-else class="log">
       <div class="log-head reveal" style="animation-delay: 0.05s">
-        <h2>the log</h2>
+        <h2>{{ t('theLog') }}</h2>
 
         <DialogRoot v-model:open="dialogOpen">
           <DialogTrigger as-child>
-            <button class="btn btn-tide">+ new wave</button>
+            <button class="btn btn-tide">{{ t('newWave') }}</button>
           </DialogTrigger>
           <DialogPortal>
             <DialogOverlay class="dialog-overlay" />
             <DialogContent class="dialog-content">
-              <DialogTitle class="dialog-title">Start a wave</DialogTitle>
+              <DialogTitle class="dialog-title">{{ t('startAWave') }}</DialogTitle>
               <form @submit.prevent="createWave">
                 <label class="field">
-                  <span class="field-label">title</span>
+                  <span class="field-label">{{ t('title') }}</span>
                   <input
                     v-model="newTitle"
                     class="text-input"
-                    placeholder="What are we making?"
+                    :placeholder="t('titlePlaceholder')"
                     autofocus
                   />
                 </label>
                 <div class="dialog-actions">
                   <DialogClose as-child>
-                    <button type="button" class="btn">cancel</button>
+                    <button type="button" class="btn">{{ t('cancel') }}</button>
                   </DialogClose>
                   <button type="submit" class="btn btn-tide" :disabled="creating || !newTitle.trim()">
-                    launch
+                    {{ t('launch') }}
                   </button>
                 </div>
               </form>
@@ -164,7 +175,7 @@ function relative(ms: number): string {
       </div>
 
       <p v-if="!waves.loading && waves.list.length === 0" class="becalmed reveal">
-        Becalmed — no waves yet. Start one.
+        {{ t('becalmed') }}
       </p>
 
       <ol class="wave-list">
@@ -216,6 +227,16 @@ function relative(ms: number): string {
 .rule {
   width: 9.5rem;
   margin-top: 0.2rem;
+}
+
+.locale-select {
+  font-size: 0.74rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--mist);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--slate);
+  cursor: pointer;
 }
 
 .helm {

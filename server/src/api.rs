@@ -63,6 +63,12 @@ pub async fn create_wave(
     CurrentUser(me): CurrentUser,
     Json(req): Json<CreateWaveRequest>,
 ) -> Result<(StatusCode, Json<WaveDigest>), ApiError> {
+    state.limits.check(
+        &me.to_string(),
+        "create-wave",
+        30,
+        std::time::Duration::from_secs(3600),
+    )?;
     let title = req.title.trim();
     if title.is_empty() || title.len() > 200 {
         return Err(ApiError::bad_request("title must be 1-200 characters"));
@@ -116,6 +122,12 @@ pub async fn add_participant(
     CurrentUser(me): CurrentUser,
     Json(req): Json<AddParticipantRequest>,
 ) -> Result<Json<WaveDigest>, ApiError> {
+    state.limits.check(
+        &me.to_string(),
+        "add-participant",
+        120,
+        std::time::Duration::from_secs(3600),
+    )?;
     let added: ParticipantId = req
         .participant
         .parse()

@@ -2,14 +2,17 @@
 // Connection indicator: a buoy that bobs while online, sits still offshore
 // while reconnecting.
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { socket } from '../lib/provider'
+
+const { t } = useI18n()
 
 const label = computed(
   () =>
     ({
-      online: 'in sync',
-      connecting: 'hailing…',
-      offline: 'adrift — edits kept locally',
+      online: t('inSync'),
+      connecting: t('connecting'),
+      offline: t('offline'),
     })[socket.status.value],
 )
 </script>

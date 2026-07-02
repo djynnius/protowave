@@ -11,8 +11,10 @@ import {
   DialogTitle,
 } from 'reka-ui'
 import { api, type ShareManifest, type ShareMeta } from '../lib/api'
+import { useI18n } from 'vue-i18n'
 import { localPart } from '../lib/wavemodel'
 
+const { t } = useI18n()
 const props = defineProps<{ share: ShareMeta }>()
 const emit = defineEmits<{ mirrored: [ShareMeta] }>()
 
@@ -56,12 +58,12 @@ async function mirror() {
         {{ localPart(share.uploader) }}
       </span>
       <span class="row">
-        <button class="linkish" @click="browse">browse</button>
+        <button class="linkish" @click="browse">{{ t('browse') }}</button>
         <span v-if="share.mirrored" class="tag tag-live" title="all chunks held locally">
-          ⬤ mirrored
+          {{ t('mirrored') }}
         </span>
         <button v-else class="linkish" :disabled="mirroring" @click="mirror">
-          {{ mirroring ? 'pinning…' : 'mirror here' }}
+          {{ mirroring ? t('pinning') : t('mirrorHere') }}
         </button>
       </span>
     </div>
@@ -78,7 +80,7 @@ async function mirror() {
             <li v-for="f in manifest.files" :key="f.path">
               <span class="path">{{ f.path }}</span>
               <span class="caption">{{ prettySize(f.size) }}</span>
-              <a class="linkish" :href="fileUrl(f.path)">download</a>
+              <a class="linkish" :href="fileUrl(f.path)">{{ t('download') }}</a>
             </li>
           </ul>
         </DialogContent>

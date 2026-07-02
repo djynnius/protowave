@@ -7,7 +7,9 @@ import * as Y from 'yjs'
 import { sanitizeFragmentXml } from '../lib/markdown'
 import { threadOrder, type BlipEntry } from '../lib/wavemodel'
 import WaveMesh from './WaveMesh.vue'
+import { useI18n } from 'vue-i18n'
 
+const { t } = useI18n()
 const props = defineProps<{ wavelet: string }>()
 const emit = defineEmits<{ close: [] }>()
 
@@ -72,7 +74,9 @@ watch(position, (k) => materialize(k))
 watch(updates, () => materialize(position.value))
 
 const label = computed(() =>
-  loading.value ? 'hauling in the log…' : `${position.value} / ${updates.value.length} updates`,
+  loading.value
+    ? t('loadingHistory')
+    : t('updatesLabel', { k: position.value, n: updates.value.length }),
 )
 
 load()
@@ -81,8 +85,8 @@ load()
 <template>
   <aside class="playback">
     <header>
-      <h3>replay the wave</h3>
-      <button class="btn" @click="emit('close')">close</button>
+      <h3>{{ t('replayTitle') }}</h3>
+      <button class="btn" @click="emit('close')">{{ t('close') }}</button>
     </header>
     <WaveMesh :active="loading" :width="400" />
     <p v-if="error" class="error-note">{{ error }}</p>
@@ -110,7 +114,7 @@ load()
         <div class="frame-body" v-html="blip.html" />
       </article>
       <p v-if="!loading && rendered.length === 0" class="mono empty">
-        — nothing yet at this point in time —
+        {{ t('emptyAtThisPoint') }}
       </p>
     </div>
   </aside>

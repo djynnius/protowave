@@ -1,0 +1,61 @@
+<!doctype html>
+<!-- ProtoWave sample extension: a collaborative tally. Demonstrates the
+     wave-app bridge: pw-ready → pw-init, pw-set to write shared state,
+     pw-state on every remote change. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font-family: 'Hanken Grotesk', system-ui, sans-serif; margin: 0;
+         padding: 1rem; background: #F6F9FD; color: #0B1B2B; }
+  h4 { font-family: 'Archivo', sans-serif; margin: 0 0 .7rem; font-weight: 900; }
+  .row { display: flex; gap: .5rem; flex-wrap: wrap; }
+  button { font: inherit; font-weight: 600; border: 1px solid #E2E9F0;
+           background: #fff; border-radius: 999px; padding: .45rem 1rem;
+           cursor: pointer; }
+  button:hover { border-color: #2E6BF0; color: #2E6BF0; }
+  .count { font-family: 'JetBrains Mono', monospace; font-size: .8rem;
+           color: #46586B; margin-left: .35rem; }
+  .who { font-size: .72rem; color: #7688A0; margin-top: .8rem; }
+</style>
+</head>
+<body>
+  <h4>Quick tally</h4>
+  <div class="row" id="options"></div>
+  <p class="who" id="who"></p>
+  <script>
+    const OPTIONS = ['Aye 🌊', 'Nay 🪨', 'Abstain 🐚']
+    let state = {}
+    let me = 'someone'
+
+    function render() {
+      const row = document.getElementById('options')
+      row.innerHTML = ''
+      for (const opt of OPTIONS) {
+        const votes = state[opt] || {}
+        const count = Object.keys(votes).length
+        const btn = document.createElement('button')
+        btn.innerHTML = opt + '<span class="count">' + count + '</span>'
+        btn.onclick = () => {
+          const next = { ...votes }
+          if (next[me]) delete next[me]
+          else next[me] = true
+          parent.postMessage({ type: 'pw-set', key: opt, value: next }, '*')
+        }
+        row.appendChild(btn)
+      }
+      const mine = OPTIONS.find((o) => (state[o] || {})[me])
+      document.getElementById('who').textContent =
+        me + (mine ? ' voted: ' + mine : ' — tap to vote (live for everyone on the wave)')
+    }
+
+    window.addEventListener('message', (event) => {
+      const msg = event.data
+      if (!msg) return
+      if (msg.type === 'pw-init') { state = msg.state || {}; me = msg.me || me; render() }
+      if (msg.type === 'pw-state') { state = msg.state || {}; render() }
+    })
+    parent.postMessage({ type: 'pw-ready' }, '*')
+  </script>
+</body>
+</html>

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
-use axum::extract::{FromRequestParts, State};
+use axum::extract::{ConnectInfo, FromRequestParts, State};
 use axum::http::header::{COOKIE, SET_COOKIE};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -127,8 +127,12 @@ async fn start_session(
 
 pub async fn register(
     State(state): State<Arc<AppState>>,
+    conn: Option<ConnectInfo<std::net::SocketAddr>>,
     Json(req): Json<CredentialsRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if let Some(conn) = &conn {
+        crate::limits::limit_ip(&state, conn, "register", 5, 60)?;
+    }
     if req.password.len() < 8 {
         return Err(ApiError::bad_request(
             "password must be at least 8 characters",
@@ -160,8 +164,12 @@ pub async fn register(
 
 pub async fn login(
     State(state): State<Arc<AppState>>,
+    conn: Option<ConnectInfo<std::net::SocketAddr>>,
     Json(req): Json<CredentialsRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if let Some(conn) = &conn {
+        crate::limits::limit_ip(&state, conn, "login", 10, 60)?;
+    }
     let unauthorized = || ApiError(StatusCode::UNAUTHORIZED, "invalid credentials".into());
     let participant = ParticipantId::new(&req.name, &state.domain).map_err(|_| unauthorized())?;
     let account = state
