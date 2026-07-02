@@ -1,0 +1,54 @@
+// ProtoWave client-server wire protocol, v1 (PRD §8.1).
+//
+// One WebSocket per client session carries binary-encoded Envelope frames,
+// multiplexing the logical channels below. CRDT payloads on the SYNC channel
+// are opaque yrs (lib0) binary — never re-encoded.
+//
+// This file is the canonical schema: the Rust types are generated from it at
+// build time (protox + prost), and the web client parses it at runtime
+// (protobufjs). Keep it self-contained.
+
+syntax = "proto3";
+
+package protowave.v1;
+
+// Logical channels multiplexed over one WebSocket.
+enum Channel {
+  CHANNEL_UNSPECIFIED = 0;
+  // Session control: authentication, wavelet subscribe/unsubscribe.
+  CHANNEL_CONTROL = 1;
+  // yrs document updates (opaque lib0 bytes). Phase 1.
+  CHANNEL_SYNC = 2;
+  // Ephemeral presence/cursors (yrs awareness). Phase 1.
+  CHANNEL_AWARENESS = 3;
+  // Translation overlay patches. Phase 4.
+  CHANNEL_TRANSLATION = 4;
+  // Server-initiated notifications. Phase 2.
+  CHANNEL_NOTIFICATION = 5;
+  // Phase 0 scaffolding only: server echoes the envelope back verbatim.
+  // Removed once CHANNEL_SYNC lands.
+  CHANNEL_ECHO = 6;
+}
+
+message Envelope {
+  Channel channel = 1;
+  bytes payload = 2;
+}
+
+// ---- CHANNEL_CONTROL payloads (Phase 0: auth handshake only) ----
+
+// First frame a client must send after connecting.
+message AuthRequest {
+  // user@domain
+  string participant = 1;
+  // Phase 0: static dev token; real session auth lands with FR-1..2.
+  string token = 2;
+}
+
+message AuthResponse {
+  bool ok = 1;
+  // Opaque session identifier, set when ok.
+  string session_id = 2;
+  // Human-readable reason, set when !ok.
+  string error = 3;
+}

@@ -16,3 +16,6 @@ web/dist/
 # Env
 .env
 .env.*
+
+# Build artifacts
+*.tsbuildinfo

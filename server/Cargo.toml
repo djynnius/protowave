@@ -1,0 +1,22 @@
+[package]
+name = "protowave-server"
+description = "ProtoWave server: axum gateway (Phase 0: auth handshake + echo channel)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+protowave-core.workspace = true
+protowave-proto.workspace = true
+axum.workspace = true
+tokio.workspace = true
+prost.workspace = true
+rand.workspace = true
+hex.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tokio-tungstenite.workspace = true
+futures-util.workspace = true

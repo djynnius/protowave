@@ -1,0 +1,63 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.shell {
+  width: min(40rem, 92vw);
+  padding: 2rem 0;
+}
+
+.phase {
+  font-size: 0.5em;
+  vertical-align: middle;
+  opacity: 0.6;
+}
+
+.card {
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+input {
+  margin-left: 0.5rem;
+  padding: 0.3rem 0.5rem;
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.status[data-status='authenticated'] {
+  color: green;
+}
+
+.status[data-status='error'] {
+  color: crimson;
+}
+
+.session {
+  font-family: monospace;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+.error {
+  color: crimson;
+}
