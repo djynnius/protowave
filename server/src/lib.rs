@@ -11,6 +11,7 @@ pub mod federation;
 pub mod search;
 pub mod store;
 pub mod store_pg;
+pub mod translate;
 pub mod ws;
 
 use std::collections::HashSet;
@@ -34,6 +35,7 @@ pub struct AppState {
     pub cas: Cas,
     pub search: Arc<dyn SearchIndex>,
     pub federation: Federation,
+    pub translation: translate::TranslationHub,
     /// This server's federation domain (PRD §8.2).
     pub domain: String,
 }
@@ -48,15 +50,30 @@ impl AppState {
         fsync: bool,
         fed_config: FederationConfig,
     ) -> std::io::Result<Arc<Self>> {
+        let call_cap = std::env::var("PROTOWAVE_TRANSLATE_CAP")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5000);
         let state = Arc::new(Self {
             engine: Engine::new(store.clone()),
             store,
             cas: Cas::open(data_dir.join("blobs"), fsync)?,
             search: Arc::new(TantivyIndex::open(&data_dir.join("search"))?),
             federation: Federation::new(fed_config, data_dir)?,
+            translation: translate::TranslationHub::new(call_cap),
             domain: domain.into(),
         });
+        // Gemini Flash-Lite-class reference provider (FR-46); swap via env.
+        if let Ok(key) = std::env::var("PROTOMOLECULE") {
+            let model = std::env::var("PROTOWAVE_TRANSLATE_MODEL")
+                .unwrap_or_else(|_| "gemini-3.1-flash-lite".into());
+            tracing::info!(%model, "translation provider configured");
+            state
+                .translation
+                .set_translator(Arc::new(translate::GeminiTranslator::new(key, model)));
+        }
         spawn_search_indexer(state.clone());
+        translate::spawn_translation_worker(state.clone());
         Ok(state)
     }
 
@@ -132,6 +149,7 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route("/api/waves", get(api::list_waves).post(api::create_wave))
         .route("/api/waves/participants", post(api::add_participant))
         .route("/api/waves/read", post(api::mark_read))
+        .route("/api/waves/translation", post(api::set_translation))
         .route("/api/history", get(api::history))
         .route("/api/search", get(api::search))
         .route(

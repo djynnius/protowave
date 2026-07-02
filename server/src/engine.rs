@@ -90,6 +90,27 @@ impl LiveWavelet {
         out
     }
 
+    /// Per-blip plain text — feeds the translation hub (PRD §9): work is
+    /// O(changed blips), keyed by content hash downstream (NFR-C7).
+    pub fn extract_blips(&self) -> Vec<(String, String)> {
+        let doc = self.doc.lock().unwrap();
+        let txn = doc.transact();
+        let mut out = Vec::new();
+        if let Some(blips) = txn.get_map("blips") {
+            for (key, value) in blips.iter(&txn) {
+                if let Out::YXmlFragment(frag) = value {
+                    let mut text = String::new();
+                    strip_tags(&frag.get_string(&txn), &mut text);
+                    let text = text.trim().to_string();
+                    if !text.is_empty() {
+                        out.push((key.to_string(), text));
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn cached_awareness(&self) -> Vec<Arc<Vec<u8>>> {
         self.awareness.lock().unwrap().values().cloned().collect()
     }
@@ -123,9 +144,9 @@ fn strip_tags(xml: &str, out: &mut String) {
 pub struct Engine {
     store: Arc<dyn WaveStore>,
     open: Mutex<HashMap<String, Arc<LiveWavelet>>>,
-    /// Notified with the wavelet name after every applied update; the search
-    /// indexer listens (FR-29 incremental indexing).
-    changed_tx: Mutex<Option<mpsc::UnboundedSender<WaveletName>>>,
+    /// Notified with the wavelet name after every applied update; the
+    /// search indexer and translation hub listen (FR-29, PRD §9).
+    changed_tx: Mutex<Vec<mpsc::UnboundedSender<WaveletName>>>,
 }
 
 impl Engine {
@@ -133,13 +154,13 @@ impl Engine {
         Self {
             store,
             open: Mutex::new(HashMap::new()),
-            changed_tx: Mutex::new(None),
+            changed_tx: Mutex::new(Vec::new()),
         }
     }
 
     pub fn change_stream(&self) -> mpsc::UnboundedReceiver<WaveletName> {
         let (tx, rx) = mpsc::unbounded_channel();
-        *self.changed_tx.lock().unwrap() = Some(tx);
+        self.changed_tx.lock().unwrap().push(tx);
         rx
     }
 
@@ -214,9 +235,10 @@ impl Engine {
             from,
             kind: EventKind::Update(Arc::new(bytes)),
         });
-        if let Some(tx) = self.changed_tx.lock().unwrap().as_ref() {
-            let _ = tx.send(live.name.clone());
-        }
+        self.changed_tx
+            .lock()
+            .unwrap()
+            .retain(|tx| tx.send(live.name.clone()).is_ok());
         Ok(())
     }
 

@@ -44,6 +44,33 @@ const entries = shallowRef<BlipEntry[]>([])
 const presence = ref<{ name: string; color: string }[]>([])
 const attachments = ref<AttachmentMeta[]>([])
 const showPlayback = ref(false)
+const translationLang = ref(localStorage.getItem('pw-lang') ?? '')
+const enableTranslationOpen = ref(false)
+
+const LANGUAGES: [string, string][] = [
+  ['es', 'Español'],
+  ['fr', 'Français'],
+  ['de', 'Deutsch'],
+  ['pt', 'Português'],
+  ['yo', 'Yorùbá'],
+  ['ig', 'Igbo'],
+  ['ha', 'Hausa'],
+  ['sw', 'Kiswahili'],
+  ['ar', 'العربية'],
+  ['zh', '中文'],
+  ['en', 'English'],
+]
+
+function applyTranslationLang() {
+  localStorage.setItem('pw-lang', translationLang.value)
+  provider.setTranslationLang(translationLang.value || null)
+}
+
+async function enableTranslation() {
+  await waves.setTranslation(waveId, true)
+  enableTranslationOpen.value = false
+  if (translationLang.value) applyTranslationLang()
+}
 const showDocuments = ref(false)
 const uploading = ref(false)
 const addOpen = ref(false)
@@ -89,6 +116,8 @@ onMounted(async () => {
   readManifest()
   readPresence()
   refreshAttachments()
+  // Resume the reader's preferred language on waves that opted in.
+  if (digest.value?.translationEnabled && translationLang.value) applyTranslationLang()
   // Opening the wave marks it read (FR-8).
   api.markRead(waveId).catch(() => {})
   waves.clearUnread(waveId)
@@ -162,6 +191,45 @@ async function uploadFile(event: Event) {
         <button class="btn" :data-on="showDocuments || undefined" @click="showDocuments = !showDocuments">
           ⛁ files<template v-if="attachments.length"> ({{ attachments.length }})</template>
         </button>
+
+        <select
+          v-if="digest?.translationEnabled"
+          v-model="translationLang"
+          class="lang-select mono"
+          title="read this wave in…"
+          @change="applyTranslationLang"
+        >
+          <option value="">original</option>
+          <option v-for="[code, label] in LANGUAGES" :key="code" :value="code">
+            ≈ {{ label }}
+          </option>
+        </select>
+        <DialogRoot v-else v-model:open="enableTranslationOpen">
+          <DialogTrigger as-child>
+            <button class="btn">≈ translation</button>
+          </DialogTrigger>
+          <DialogPortal>
+            <DialogOverlay class="dialog-overlay" />
+            <DialogContent class="dialog-content">
+              <DialogTitle class="dialog-title">Enable live translation?</DialogTitle>
+              <p class="disclosure">
+                When translation is on, the text of this wave is sent to a
+                third-party model API (Google Gemini) to produce translations
+                for participants reading in other languages. Translations are
+                overlays — the original text is always what's stored, and
+                every reader can switch back to it at any time.
+              </p>
+              <div class="dialog-actions">
+                <DialogClose as-child>
+                  <button type="button" class="btn">not now</button>
+                </DialogClose>
+                <button type="button" class="btn btn-tide" @click="enableTranslation">
+                  enable for this wave
+                </button>
+              </div>
+            </DialogContent>
+          </DialogPortal>
+        </DialogRoot>
 
         <DialogRoot v-model:open="addOpen">
           <DialogTrigger as-child>
@@ -238,6 +306,7 @@ async function uploadFile(event: Event) {
           :provider="provider"
           :me="me"
           :depth="node.depth"
+          :translation="translationLang ? provider.translations.value[node.entry.id] : undefined"
           @reply="reply"
         />
       </div>
@@ -295,6 +364,23 @@ async function uploadFile(event: Event) {
 .btn[data-on] {
   border-color: var(--tide);
   color: var(--tide-deep);
+}
+
+.lang-select {
+  font-size: 0.78rem;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid var(--tide);
+  border-radius: 4px;
+  background: var(--tide-wash);
+  color: var(--tide-deep);
+  cursor: pointer;
+}
+
+.disclosure {
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  margin: 0 0 1rem;
 }
 
 .title {

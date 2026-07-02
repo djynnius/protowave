@@ -226,6 +226,7 @@ pub fn spawn_announce(state: Arc<AppState>, meta: WaveMeta) {
             created_by: meta.created_by.clone(),
             created_ms: meta.created_ms,
             acl_version: meta.acl_version,
+            translation_enabled: meta.translation_enabled,
         }
         .encode_to_vec();
         for domain in remote_domains(&meta, &state.domain) {
@@ -485,6 +486,7 @@ pub async fn handle_announce(
         created_ms: ann.created_ms,
         last_activity_ms: now_ms(),
         acl_version: ann.acl_version,
+        translation_enabled: ann.translation_enabled,
     };
     state.store.put_wave(&meta).await?;
     tracing::info!(wave = %ann.wave, home = %peer, "wave announced by home server");

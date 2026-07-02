@@ -56,6 +56,9 @@ message WaveAnnouncement {
   string created_by = 4;
   uint64 created_ms = 5;
   uint64 acl_version = 6;
+  // Wave-level translation opt-in (FR-40) — replicated so every server
+  // enforces it for its own viewers.
+  bool translation_enabled = 7;
 }
 
 message FedAck {

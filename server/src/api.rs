@@ -33,6 +33,8 @@ pub struct WaveDigest {
     #[serde(rename = "lastActivityMs")]
     pub last_activity_ms: u64,
     pub unread: bool,
+    #[serde(rename = "translationEnabled")]
+    pub translation_enabled: bool,
 }
 
 impl WaveDigest {
@@ -46,6 +48,7 @@ impl WaveDigest {
             root_wavelet,
             created_by: meta.created_by,
             last_activity_ms: meta.last_activity_ms,
+            translation_enabled: meta.translation_enabled,
         }
     }
 }
@@ -78,6 +81,7 @@ pub async fn create_wave(
         created_ms: now,
         last_activity_ms: now,
         acl_version: 1,
+        translation_enabled: false,
     };
     state.store.put_wave(&meta).await?;
     tracing::info!(wave = %meta.wave, by = %me, "wave created");
@@ -147,6 +151,44 @@ pub async fn add_participant(
         state.store.put_wave(&meta).await?;
         tracing::info!(wave = %meta.wave, participant = %added, by = %me, "participant added");
         // Distribute the authoritative membership to peer servers.
+        crate::federation::spawn_announce(state.clone(), meta.clone());
+    }
+    Ok(Json(WaveDigest::new(meta, u64::MAX)))
+}
+
+// ---- translation opt-in (FR-40) ----
+
+#[derive(Deserialize)]
+pub struct SetTranslationRequest {
+    pub wave: String,
+    pub enabled: bool,
+}
+
+pub async fn set_translation(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(me): CurrentUser,
+    Json(req): Json<SetTranslationRequest>,
+) -> Result<Json<WaveDigest>, ApiError> {
+    let mut meta = state
+        .store
+        .get_wave(&req.wave)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such wave".into()))?;
+    if !meta.participants.contains(&me.to_string()) {
+        return Err(ApiError(StatusCode::FORBIDDEN, "not a participant".into()));
+    }
+    let home = meta.wave.split('/').next().unwrap_or_default().to_string();
+    if home != state.domain {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            format!("translation policy is managed by the wave's home server ({home})"),
+        ));
+    }
+    if meta.translation_enabled != req.enabled {
+        meta.translation_enabled = req.enabled;
+        meta.acl_version += 1;
+        state.store.put_wave(&meta).await?;
+        tracing::info!(wave = %meta.wave, enabled = req.enabled, by = %me, "translation toggled");
         crate::federation::spawn_announce(state.clone(), meta.clone());
     }
     Ok(Json(WaveDigest::new(meta, u64::MAX)))

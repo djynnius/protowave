@@ -39,7 +39,16 @@ npm run build          # type-check + production build
 
 ## Status
 
-**Phase 3 (Federation)** — see PRD §12 for the roadmap.
+**Phase 4 (Translation)** — see PRD §12 for the roadmap.
+
+Waves can opt in to live translation (with an explicit third-party-API
+disclosure): readers pick a language and every blip gains a translated
+overlay that updates as people type — the original text is always what's
+stored, and switching back is one click. Provider is swappable
+(`Translator` trait); the reference implementation is Gemini Flash-Lite
+(`PROTOMOLECULE` env for the API key, `PROTOWAVE_TRANSLATE_MODEL` to
+change models). Translations are cached by content hash and capped by
+`PROTOWAVE_TRANSLATE_CAP`.
 
 Two ProtoWave servers can now federate: add `bob@other.server` to a wave
 and both servers hold live replicas — cross-server co-editing converges,

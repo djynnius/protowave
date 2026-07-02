@@ -8,6 +8,7 @@ export interface WaveDigest {
   createdBy: string
   lastActivityMs: number
   unread: boolean
+  translationEnabled: boolean
 }
 
 export interface AttachmentMeta {
@@ -67,6 +68,11 @@ export const api = {
     request<WaveDigest>('/api/waves/participants', {
       method: 'POST',
       body: JSON.stringify({ wave, participant }),
+    }),
+  setTranslation: (wave: string, enabled: boolean) =>
+    request<WaveDigest>('/api/waves/translation', {
+      method: 'POST',
+      body: JSON.stringify({ wave, enabled }),
     }),
   markRead: (wave: string) =>
     request<{ ok: boolean }>('/api/waves/read', {

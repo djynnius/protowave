@@ -8,13 +8,17 @@ budgets (NFR-Cx), architecture decisions (ADR-1..5), and the phase roadmap
 
 ## Status
 
-- **Phases 0–3 complete**: foundations, real-time collaboration, Wave
-  parity (search/attachments/markdown/playback/read-state/PostgreSQL), and
-  **federation** (signed s2s over HTTP — see `server/src/federation.rs`,
-  spec in `docs/federation-spec.md`; tonic/gRPC deferred because it does
-  not build on rustc 1.75). Two-server interop suite:
-  `server/tests/federation.rs`.
-- **Phase 4 (Translation) is next** per PRD §12.
+- **Phases 0–4 complete**: foundations, real-time collaboration, Wave
+  parity (search/attachments/markdown/playback/read-state/PostgreSQL),
+  **federation** (signed s2s over HTTP — `server/src/federation.rs`, spec
+  in `docs/federation-spec.md`), and **translation**
+  (`server/src/translate.rs`: `Translator` trait, Gemini reference impl
+  over hyper-rustls, TranslationHub with content-hash cache + call cap;
+  overlays on CHANNEL_TRANSLATION; wave opt-in via
+  `/api/waves/translation`). Gemini key comes from the `PROTOMOLECULE`
+  env var (set in ~/.bashrc behind the interactive guard — extract with
+  `eval "$(grep PROTOMOLECULE ~/.bashrc | head -1)"`).
+- **Phase 5 (P2P folder sharing) is next** per PRD §12.
 - Deferred: OIDC login (FR-3), in-text anchored inline replies (FR-19),
   participant *removal* + federated blob fetch for attachments, gRPC/TLS
   transport for federation.

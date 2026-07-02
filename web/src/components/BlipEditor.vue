@@ -16,6 +16,7 @@ const props = defineProps<{
   provider: WaveletProvider
   me: string
   depth: number
+  translation?: string
 }>()
 
 const emit = defineEmits<{ reply: [parent: string] }>()
@@ -49,6 +50,9 @@ function timeOf(ts: number): string {
     </div>
     <div class="body">
       <EditorContent :editor="editor" class="blip-editor" />
+      <p v-if="translation" class="translation">
+        <span class="tilde" aria-hidden="true">≈</span>{{ translation }}
+      </p>
       <button class="reply mono" @click="emit('reply', entry.id)">↳ reply</button>
     </div>
   </article>
@@ -101,6 +105,24 @@ time {
 .body {
   position: relative;
   min-width: 0;
+}
+
+/* Translation overlay: derived, never the document itself (PRD §9). */
+.translation {
+  margin: 0.3rem 0 0;
+  padding: 0.35rem 0.6rem;
+  background: var(--tide-wash);
+  border-left: 2px solid var(--tide);
+  border-radius: 0 4px 4px 0;
+  font-style: italic;
+  color: var(--tide-deep);
+  font-size: 0.95rem;
+}
+
+.tilde {
+  font-family: var(--font-mono);
+  margin-right: 0.4rem;
+  opacity: 0.6;
 }
 
 .reply {

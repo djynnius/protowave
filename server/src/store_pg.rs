@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS attachments (
 CREATE INDEX IF NOT EXISTS attachments_wave ON attachments (wave);
 CREATE INDEX IF NOT EXISTS waves_activity ON waves (last_activity_ms DESC);
 ALTER TABLE waves ADD COLUMN IF NOT EXISTS acl_version BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE waves ADD COLUMN IF NOT EXISTS translation_enabled BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS peer_keys (
     domain TEXT PRIMARY KEY,
     public_key TEXT NOT NULL
@@ -107,6 +108,7 @@ impl PgStore {
             created_ms: row.get::<_, i64>("created_ms") as u64,
             last_activity_ms: row.get::<_, i64>("last_activity_ms") as u64,
             acl_version: row.get::<_, i64>("acl_version") as u64,
+            translation_enabled: row.get("translation_enabled"),
         }
     }
 }
@@ -277,10 +279,10 @@ impl WaveStore for PgStore {
         let client = self.client().await?;
         client
             .execute(
-                "INSERT INTO waves (wave, title, participants, created_by, created_ms, last_activity_ms, acl_version)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                "INSERT INTO waves (wave, title, participants, created_by, created_ms, last_activity_ms, acl_version, translation_enabled)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                  ON CONFLICT (wave) DO UPDATE SET
-                    title = $2, participants = $3, last_activity_ms = $6, acl_version = $7",
+                    title = $2, participants = $3, last_activity_ms = $6, acl_version = $7, translation_enabled = $8",
                 &[
                     &meta.wave,
                     &meta.title,
@@ -289,6 +291,7 @@ impl WaveStore for PgStore {
                     &(meta.created_ms as i64),
                     &(meta.last_activity_ms as i64),
                     &(meta.acl_version as i64),
+                    &meta.translation_enabled,
                 ],
             )
             .await

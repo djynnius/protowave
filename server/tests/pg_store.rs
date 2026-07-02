@@ -73,6 +73,7 @@ async fn pg_store_full_contract() {
             created_ms: 1,
             last_activity_ms: 1,
             acl_version: 1,
+            translation_enabled: false,
         })
         .await
         .unwrap();

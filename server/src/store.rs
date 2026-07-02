@@ -47,6 +47,10 @@ pub struct WaveMeta {
     /// version they were authored under (FR-51).
     #[serde(default)]
     pub acl_version: u64,
+    /// Wave-level translation opt-in (FR-40): content is only ever sent to
+    /// the translation provider when this is true.
+    #[serde(default)]
+    pub translation_enabled: bool,
 }
 
 /// Attachment metadata (FR-37). The blob itself lives in the CAS keyed by
@@ -468,6 +472,7 @@ mod tests {
                     created_ms: i as u64,
                     last_activity_ms: i as u64,
                     acl_version: 1,
+                    translation_enabled: false,
                 })
                 .await
                 .unwrap();

@@ -120,6 +120,7 @@ async fn session(mut socket: WebSocket, state: Arc<AppState>, user: ParticipantI
         sub.live.drop_awareness(conn_id);
         sub.forwarder.abort();
     }
+    state.translation.drop_conn(conn_id);
     tracing::info!(%user, conn = conn_id, "ws session closed");
 }
 
@@ -146,6 +147,14 @@ async fn handle_frame(
                         sub.live.drop_awareness(conn_id);
                         sub.forwarder.abort();
                     }
+                    state.translation.unsubscribe(&unsub.wavelet, conn_id);
+                    None
+                }
+                control_message::Kind::TranslateSubscribe(req) => {
+                    Some(translate_subscribe(state, conn_id, req, subs, out_tx).await)
+                }
+                control_message::Kind::TranslateUnsubscribe(req) => {
+                    state.translation.unsubscribe(&req.wavelet, conn_id);
                     None
                 }
                 _ => None,
@@ -206,6 +215,58 @@ async fn handle_frame(
         Ok(pb::Channel::Echo) => Some(frame.to_vec()),
         _ => None,
     }
+}
+
+/// TranslateSubscribe (FR-41): requires an existing wavelet subscription
+/// (which proved ACL) and the wave's translation opt-in (FR-40).
+async fn translate_subscribe(
+    state: &Arc<AppState>,
+    conn_id: u64,
+    req: pb::TranslateSubscribe,
+    subs: &HashMap<String, Subscription>,
+    out_tx: &mpsc::Sender<Vec<u8>>,
+) -> Vec<u8> {
+    if !subs.contains_key(&req.wavelet) {
+        return error_frame(&req.wavelet, "not-subscribed", "subscribe first");
+    }
+    if !state.translation.available() {
+        return error_frame(
+            &req.wavelet,
+            "translation-unavailable",
+            "no provider configured",
+        );
+    }
+    let lang = req.target_lang.trim().to_lowercase();
+    if lang.is_empty() || lang.len() > 16 {
+        return error_frame(&req.wavelet, "bad-request", "bad target language");
+    }
+    let name: WaveletName = match req.wavelet.parse() {
+        Ok(n) => n,
+        Err(e) => return error_frame(&req.wavelet, "bad-request", &e.to_string()),
+    };
+    match state.store.get_wave(&name.wave_id.to_string()).await {
+        Ok(Some(meta)) if meta.translation_enabled => {}
+        Ok(Some(_)) => {
+            return error_frame(
+                &req.wavelet,
+                "translation-disabled",
+                "this wave has not opted in to translation",
+            )
+        }
+        _ => return error_frame(&req.wavelet, "not-found", "no such wave"),
+    }
+
+    state
+        .translation
+        .subscribe(&req.wavelet, conn_id, lang, out_tx.clone());
+    // Translate current content immediately; changes stream afterwards.
+    let translate_state = state.clone();
+    tokio::spawn(async move {
+        crate::translate::translate_wavelet(&translate_state, &name).await;
+    });
+    control_frame(control_message::Kind::Subscribed(pb::Subscribed {
+        wavelet: req.wavelet,
+    }))
 }
 
 async fn subscribe(

@@ -46,7 +46,22 @@ message ControlMessage {
     Unsubscribe unsubscribe = 2;
     Subscribed subscribed = 3;
     ControlError error = 4;
+    TranslateSubscribe translate_subscribe = 5;
+    TranslateUnsubscribe translate_unsubscribe = 6;
   }
+}
+
+// Client → server: start receiving translation overlays for a wavelet the
+// client is already subscribed to (FR-41..42). Requires the wave's
+// translation opt-in (FR-40).
+message TranslateSubscribe {
+  string wavelet = 1;
+  // BCP-47-ish target language, e.g. "es", "fr", "yo".
+  string target_lang = 2;
+}
+
+message TranslateUnsubscribe {
+  string wavelet = 1;
 }
 
 // Client → server: open a wavelet. state_vector is the client's current yrs
@@ -95,6 +110,24 @@ message SyncState {
 
 message Update {
   bytes update = 1;
+}
+
+// ---- CHANNEL_TRANSLATION payloads ----
+
+// Server → client: translated overlay text per blip. Translations are
+// ephemeral derived state (PRD §9) — never stored in the document; the
+// original is always the source of truth (FR-41).
+message TranslationMessage {
+  string wavelet = 1;
+  string target_lang = 2;
+  repeated TranslationEntry entries = 3;
+}
+
+message TranslationEntry {
+  string blip = 1;
+  string text = 2;
+  // True while the source is still changing (live draft, may revise).
+  bool pending = 3;
 }
 
 // ---- CHANNEL_AWARENESS payloads ----

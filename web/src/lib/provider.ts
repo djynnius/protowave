@@ -20,8 +20,11 @@ import {
   decodeControl,
   decodeEnvelope,
   decodeSync,
+  decodeTranslation,
   encodeAwareness,
   encodeSubscribe,
+  encodeTranslateSubscribe,
+  encodeTranslateUnsubscribe,
   encodeUnsubscribe,
   encodeUpdate,
 } from './protocol'
@@ -119,6 +122,11 @@ export class WaveSocket {
         this.providers.get(msg.wavelet)?.onRemoteAwareness(msg.payload)
         break
       }
+      case Channel.TRANSLATION: {
+        const msg = decodeTranslation(env.payload)
+        this.providers.get(msg.wavelet)?.onTranslation(msg.entries)
+        break
+      }
     }
   }
 }
@@ -128,6 +136,9 @@ export class WaveletProvider {
   readonly awareness = new Awareness(this.doc)
   readonly synced = ref(false)
   readonly error: Ref<string | null> = ref(null)
+  /// Ephemeral translation overlays: blip id → translated text (PRD §9).
+  readonly translations: Ref<Record<string, string>> = ref({})
+  private translationLang: string | null = null
 
   constructor(
     private socket: WaveSocket,
@@ -140,6 +151,27 @@ export class WaveletProvider {
 
   resubscribe() {
     this.socket.send(encodeSubscribe(this.wavelet, Y.encodeStateVector(this.doc)))
+    if (this.translationLang) {
+      this.socket.send(encodeTranslateSubscribe(this.wavelet, this.translationLang))
+    }
+  }
+
+  setTranslationLang(lang: string | null) {
+    this.translationLang = lang
+    this.translations.value = {}
+    if (lang) {
+      this.socket.send(encodeTranslateSubscribe(this.wavelet, lang))
+    } else {
+      this.socket.send(encodeTranslateUnsubscribe(this.wavelet))
+    }
+  }
+
+  onTranslation(entries: { blip: string; text: string }[]) {
+    const next = { ...this.translations.value }
+    for (const entry of entries) {
+      next[entry.blip] = entry.text
+    }
+    this.translations.value = next
   }
 
   markUnsynced() {

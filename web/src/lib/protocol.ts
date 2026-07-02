@@ -11,6 +11,7 @@ const EnvelopeType = root.lookupType('protowave.v1.Envelope')
 const ControlType = root.lookupType('protowave.v1.ControlMessage')
 const SyncType = root.lookupType('protowave.v1.SyncMessage')
 const AwarenessType = root.lookupType('protowave.v1.AwarenessMessage')
+const TranslationType = root.lookupType('protowave.v1.TranslationMessage')
 
 export const Channel = {
   CONTROL: 1,
@@ -40,6 +41,12 @@ export interface SyncIn {
 export interface AwarenessIn {
   wavelet: string
   payload: Uint8Array
+}
+
+export interface TranslationIn {
+  wavelet: string
+  targetLang: string
+  entries: { blip: string; text: string; pending?: boolean }[]
 }
 
 function envelope(channel: number, payload: Uint8Array): Uint8Array {
@@ -83,4 +90,24 @@ export function decodeSync(payload: Uint8Array): SyncIn {
 
 export function decodeAwareness(payload: Uint8Array): AwarenessIn {
   return AwarenessType.toObject(AwarenessType.decode(payload)) as AwarenessIn
+}
+
+export function encodeTranslateSubscribe(wavelet: string, targetLang: string): Uint8Array {
+  const payload = ControlType.encode(
+    ControlType.create({ translateSubscribe: { wavelet, targetLang } }),
+  ).finish()
+  return envelope(Channel.CONTROL, payload)
+}
+
+export function encodeTranslateUnsubscribe(wavelet: string): Uint8Array {
+  const payload = ControlType.encode(
+    ControlType.create({ translateUnsubscribe: { wavelet } }),
+  ).finish()
+  return envelope(Channel.CONTROL, payload)
+}
+
+export function decodeTranslation(payload: Uint8Array): TranslationIn {
+  return TranslationType.toObject(TranslationType.decode(payload), {
+    defaults: true,
+  }) as TranslationIn
 }

@@ -28,6 +28,13 @@ export const useWaves = defineStore('waves', () => {
     return digest
   }
 
+  async function setTranslation(wave: string, enabled: boolean) {
+    const digest = await api.setTranslation(wave, enabled)
+    const i = list.value.findIndex((w) => w.wave === digest.wave)
+    if (i >= 0) list.value[i] = digest
+    return digest
+  }
+
   function byId(wave: string): WaveDigest | undefined {
     return list.value.find((w) => w.wave === wave)
   }
@@ -37,5 +44,5 @@ export const useWaves = defineStore('waves', () => {
     if (digest) digest.unread = false
   }
 
-  return { list, loading, refresh, create, addParticipant, byId, clearUnread }
+  return { list, loading, refresh, create, addParticipant, setTranslation, byId, clearUnread }
 })
