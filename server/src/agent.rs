@@ -171,7 +171,12 @@ impl InferenceProvider for OllamaInference {
             .header("content-type", "application/json")
             .body(Full::new(Bytes::from(body)))
             .map_err(other)?;
-        let res = self.client.request(req).await.map_err(other)?;
+        let res = self.client.request(req).await.map_err(|e| {
+            other(format!(
+                "could not reach Ollama at {} — is it running and reachable from the server? ({e})",
+                self.base
+            ))
+        })?;
         let status = res.status();
         let bytes = res.into_body().collect().await.map_err(other)?.to_bytes();
         if !status.is_success() {
@@ -420,20 +425,25 @@ pub async fn answer_wave(
     prompt: &str,
     asker: Option<&protowave_core::ParticipantId>,
     reply_to: Option<&str>,
+    force_model: Option<crate::store::UserModel>,
 ) -> Result<(String, String), ApiError> {
-    // Route to a model from the pool (asker's own → a wave member's shared
-    // model → node default). Needs the wave's participant list.
+    // Route to a model. An explicit @label mention pins a specific model;
+    // otherwise auto-route (asker's own → a wave member's shared model →
+    // node default). Needs the wave's participant list either way.
     let meta = state
         .store
         .get_wave(wave)
         .await?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such wave".into()))?;
-    let route = select_route(state, &meta, asker).await.ok_or_else(|| {
-        ApiError(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "no model configured".into(),
-        )
-    })?;
+    let route = match force_model {
+        Some(m) => route_from(state, &m),
+        None => select_route(state, &meta, asker).await.ok_or_else(|| {
+            ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no model configured".into(),
+            )
+        })?,
+    };
     let root: WaveletName = format!("{wave}/conv+root")
         .parse()
         .map_err(|_| ApiError::bad_request("bad wave id"))?;
@@ -497,7 +507,7 @@ pub async fn ask(
     if !meta.participants.contains(&me.to_string()) {
         return Err(ApiError(StatusCode::FORBIDDEN, "not a participant".into()));
     }
-    let (answer, model) = answer_wave(&state, &req.wave, prompt, Some(&me), None).await?;
+    let (answer, model) = answer_wave(&state, &req.wave, prompt, Some(&me), None, None).await?;
     tracing::info!(wave = %req.wave, by = %me, %model, "agent answered (ask)");
     Ok(Json(serde_json::json!({
         "answer": answer,
@@ -506,14 +516,62 @@ pub async fn ask(
     })))
 }
 
-/// Background worker: when a *new* blip mentions `@assistant`, the agent
-/// answers it inline (the Wave-robots behaviour). Heavily guarded against
-/// loops and cost: agent-authored blips are skipped, each blip is answered
-/// at most once, only recent blips qualify (so a restart doesn't re-answer
-/// history), edits are debounced, and a per-wave rate limit applies.
+/// `@`-handle a pool model is addressable by: its label reduced to
+/// lowercase alphanumerics (label "Arit" → `@arit`).
+fn mention_slug(label: &str) -> String {
+    label
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Extract the `@handle` tokens from a blip (lowercased, alphanumeric run
+/// after each `@`).
+fn mention_tokens(text: &str) -> Vec<String> {
+    text.split('@')
+        .skip(1)
+        .filter_map(|seg| {
+            let tok: String = seg.chars().take_while(|c| c.is_alphanumeric()).collect();
+            (!tok.is_empty()).then(|| tok.to_lowercase())
+        })
+        .collect()
+}
+
+/// Resolve an `@label` mention to a specific pool model the author may use:
+/// their own model (any scope), or one a wave participant shared to the
+/// wave/federation. Returns None when no token names an addressable model.
+fn resolve_label_model(
+    models: &[crate::store::UserModel],
+    meta: &crate::store::WaveMeta,
+    author: &str,
+    tokens: &[String],
+) -> Option<crate::store::UserModel> {
+    let participants: std::collections::HashSet<&String> = meta.participants.iter().collect();
+    for tok in tokens {
+        if let Some(m) = models
+            .iter()
+            .find(|m| m.enabled && mention_slug(&m.label) == *tok)
+        {
+            let addressable = m.owner == author
+                || ((m.scope == "wave" || m.scope == "federation")
+                    && participants.contains(&m.owner));
+            if addressable {
+                return Some(m.clone());
+            }
+        }
+    }
+    None
+}
+
+/// Background worker: when a *new* blip mentions `@assistant` — or `@<label>`
+/// of a pool model the author may use — the agent answers it inline (the
+/// Wave-robots behaviour), routing to the addressed model. Heavily guarded
+/// against loops and cost: agent-authored blips are skipped, each blip is
+/// answered at most once, only recent blips qualify (so a restart doesn't
+/// re-answer history), edits are debounced, and a per-wave rate limit applies.
 pub fn spawn_mention_worker(state: Arc<AppState>) {
     let agent = format!("{AGENT_LOCAL}@{}", state.domain);
-    let mention = format!("@{AGENT_LOCAL}");
     let mut rx = state.engine.change_stream();
     tokio::spawn(async move {
         let mut handled: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -538,6 +596,11 @@ pub fn spawn_mention_worker(state: Arc<AppState>) {
                 Err(_) => continue,
             };
             let wave = name.wave_id.to_string();
+            let meta = match state.store.get_wave(&wave).await {
+                Ok(Some(m)) => m,
+                _ => continue,
+            };
+            let models = state.store.list_models().await.unwrap_or_default();
             for blip in live.blips_detailed() {
                 if handled.contains(&blip.id) {
                     continue;
@@ -547,16 +610,22 @@ pub fn spawn_mention_worker(state: Arc<AppState>) {
                     handled.insert(blip.id);
                     continue;
                 }
-                let recent = now_ms().saturating_sub(blip.ts) < 10 * 60 * 1000;
-                if !blip.text.contains(&mention) {
+                // Who is being addressed? @assistant → auto-route; @<label> →
+                // that specific pool model (if the author may use it). A blip
+                // that only @-mentions people isn't for us.
+                let tokens = mention_tokens(&blip.text);
+                let forced = resolve_label_model(&models, &meta, &blip.author, &tokens);
+                let wants_assistant = tokens.iter().any(|t| t == AGENT_LOCAL);
+                if forced.is_none() && !wants_assistant {
                     continue;
                 }
                 // Mark handled up-front so a mid-answer edit can't double-fire.
                 handled.insert(blip.id.clone());
+                let recent = now_ms().saturating_sub(blip.ts) < 10 * 60 * 1000;
                 if !recent {
                     continue; // old mention seen after a restart — ignore
                 }
-                // Per-wave budget guard against @assistant spam.
+                // Per-wave budget guard against mention spam.
                 if state
                     .limits
                     .check(&wave, "mention", 20, std::time::Duration::from_secs(3600))
@@ -566,7 +635,16 @@ pub fn spawn_mention_worker(state: Arc<AppState>) {
                 }
                 let asker = blip.author.parse::<protowave_core::ParticipantId>().ok();
                 // Thread the reply under the message that mentioned us.
-                match answer_wave(&state, &wave, &blip.text, asker.as_ref(), Some(&blip.id)).await {
+                match answer_wave(
+                    &state,
+                    &wave,
+                    &blip.text,
+                    asker.as_ref(),
+                    Some(&blip.id),
+                    forced,
+                )
+                .await
+                {
                     Ok((_, model)) => {
                         tracing::info!(%wave, %model, "agent answered (@mention)")
                     }
@@ -575,4 +653,74 @@ pub fn spawn_mention_worker(state: Arc<AppState>) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::{UserModel, WaveMeta};
+
+    fn model(owner: &str, label: &str, scope: &str) -> UserModel {
+        UserModel {
+            id: format!("m+{label}"),
+            owner: owner.into(),
+            label: label.into(),
+            base: "http://x:11434".into(),
+            model: "gemma3:270m".into(),
+            scope: scope.into(),
+            enabled: true,
+            created_ms: 0,
+        }
+    }
+
+    fn wave(participants: &[&str]) -> WaveMeta {
+        WaveMeta {
+            wave: "d/w+1".into(),
+            title: "t".into(),
+            participants: participants.iter().map(|s| s.to_string()).collect(),
+            created_by: participants[0].into(),
+            created_ms: 0,
+            last_activity_ms: 0,
+            acl_version: 1,
+            translation_enabled: false,
+            archived: false,
+        }
+    }
+
+    #[test]
+    fn slug_and_tokens() {
+        assert_eq!(mention_slug("Arit"), "arit");
+        assert_eq!(mention_slug("Ada's Gemma"), "adasgemma");
+        assert_eq!(
+            mention_tokens("hey @arit and @Assistant!"),
+            vec!["arit", "assistant"]
+        );
+        assert!(mention_tokens("no mentions here").is_empty());
+    }
+
+    #[test]
+    fn label_resolves_only_when_addressable() {
+        let meta = wave(&["ada@d", "bob@d"]);
+        let models = vec![
+            model("ada@d", "arit", "wave"),    // shared to the wave
+            model("cyd@d", "zed", "wave"),     // owner not a participant
+            model("cyd@d", "priv", "private"), // private, not the author's
+        ];
+        let toks = mention_tokens("@arit answer this");
+        assert_eq!(
+            resolve_label_model(&models, &meta, "bob@d", &toks).map(|m| m.label),
+            Some("arit".into())
+        );
+        // Non-participant owner's model is not addressable.
+        let toks = mention_tokens("@zed");
+        assert!(resolve_label_model(&models, &meta, "bob@d", &toks).is_none());
+        // Someone else's private model is not addressable...
+        let toks = mention_tokens("@priv");
+        assert!(resolve_label_model(&models, &meta, "bob@d", &toks).is_none());
+        // ...but the owner can address their own private model.
+        assert_eq!(
+            resolve_label_model(&models, &meta, "cyd@d", &toks).map(|m| m.label),
+            Some("priv".into())
+        );
+    }
 }

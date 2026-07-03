@@ -153,6 +153,12 @@ function scopeLabel(scope: string): string {
       ? t('scopeFederation')
       : t('scopeWave')
 }
+
+// The @-handle a model answers to: its label reduced to lowercase
+// alphanumerics (must mirror the server's mention_slug).
+function handleOf(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
 </script>
 
 <template>
@@ -286,12 +292,16 @@ function scopeLabel(scope: string): string {
               <span class="model-dot" :class="{ off: !m.enabled }" />
               <span class="model-main">
                 <b>{{ m.label || m.model }}</b>
-                <span class="model-meta caption">{{ m.model }} · {{ scopeLabel(m.scope) }}</span>
+                <span class="model-meta caption">
+                  <span v-if="handleOf(m.label)" class="handle">@{{ handleOf(m.label) }}</span>
+                  {{ m.model }} · {{ scopeLabel(m.scope) }}
+                </span>
               </span>
               <button class="link-danger" @click="removeModel(m.id)">{{ t('remove') }}</button>
             </li>
           </ul>
           <p v-else class="hint">{{ t('noModelsYet') }}</p>
+          <p v-if="myModels.length" class="hint mention-hint">{{ t('mentionHint') }}</p>
 
           <form class="form add-model" @submit.prevent="addModel">
             <p class="field-label">{{ t('addModel') }}</p>
@@ -326,6 +336,7 @@ function scopeLabel(scope: string): string {
                 <span class="model-main">
                   <b>{{ m.label || m.model }}</b>
                   <span class="model-meta caption">
+                    <span v-if="handleOf(m.label)" class="handle">@{{ handleOf(m.label) }}</span>
                     {{ m.model }} · {{ t('hostedBy') }} @{{ m.ownerName }}
                   </span>
                 </span>
@@ -467,6 +478,17 @@ function scopeLabel(scope: string): string {
 
 .model-meta {
   color: var(--steel);
+}
+
+.handle {
+  font-family: var(--font-mono);
+  color: var(--deep);
+  font-weight: 600;
+  margin-right: 0.35rem;
+}
+
+.mention-hint {
+  margin: -0.5rem 0 1rem;
 }
 
 .link-danger {

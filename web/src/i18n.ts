@@ -123,6 +123,7 @@ const en = {
   poolEmpty: 'No models shared by others yet.',
   noModelsYet: 'You haven’t added a model yet.',
   hostedBy: 'hosted by',
+  mentionHint: 'Address a model in any wave by @-mentioning its handle in a message.',
   security: 'Password',
   securityHint: 'Change the password you sign in with. You stay signed in on this device.',
   currentPassword: 'Current password',
