@@ -95,12 +95,19 @@ const playing = ref(false)
 const revealCount = ref(0)
 let playTimer: ReturnType<typeof setInterval> | null = null
 
+// Autoplay reveals messages in the order they were actually written (by
+// timestamp), not thread order — a late reply to an early post appears at
+// its real moment, still slotted into its threaded position.
+const chrono = computed(() => [...thread.value].sort((a, b) => a.entry.ts - b.entry.ts))
+const revealed = computed(
+  () => new Set(chrono.value.slice(0, revealCount.value).map((n) => n.entry.id)),
+)
 const visible = computed(() =>
-  playing.value ? thread.value.slice(0, revealCount.value) : thread.value,
+  playing.value ? thread.value.filter((n) => revealed.value.has(n.entry.id)) : thread.value,
 )
 const highlightId = computed(() =>
   playing.value && revealCount.value > 0
-    ? thread.value[revealCount.value - 1]?.entry.id
+    ? chrono.value[revealCount.value - 1]?.entry.id
     : replyTarget.value?.id,
 )
 
