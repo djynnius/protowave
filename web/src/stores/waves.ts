@@ -46,6 +46,17 @@ export const useWaves = defineStore('waves', () => {
     return digest
   }
 
+  async function archive(wave: string) {
+    await api.archiveWave(wave, true)
+    // Archived waves leave the inbox.
+    list.value = list.value.filter((w) => w.wave !== wave)
+  }
+
+  async function remove(wave: string) {
+    await api.deleteWave(wave)
+    list.value = list.value.filter((w) => w.wave !== wave)
+  }
+
   function byId(wave: string): WaveDigest | undefined {
     return list.value.find((w) => w.wave === wave)
   }
@@ -65,6 +76,8 @@ export const useWaves = defineStore('waves', () => {
     create,
     addParticipant,
     setTranslation,
+    archive,
+    remove,
     byId,
     clearUnread,
   }

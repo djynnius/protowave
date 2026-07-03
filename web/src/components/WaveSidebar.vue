@@ -11,6 +11,11 @@ import {
   DialogRoot,
   DialogTitle,
   DialogTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuRoot,
+  DropdownMenuTrigger,
 } from 'reka-ui'
 import { useI18n } from 'vue-i18n'
 import { useSession } from '../stores/session'
@@ -82,6 +87,22 @@ async function createWave() {
   open(digest.wave)
 }
 
+async function archiveWave(wave: string) {
+  await waves.archive(wave).catch(() => {})
+  if (wave === props.current) router.push({ name: 'inbox' })
+}
+async function deleteWave(wave: string) {
+  if (!window.confirm(t('deleteWaveConfirm'))) return
+  await waves.remove(wave).catch(() => {})
+  if (wave === props.current) router.push({ name: 'inbox' })
+}
+
+// >9 unread shows as "9+"; a wave flagged unread but with no countable new
+// blips (activity without a posted blip) still shows a single dot.
+function unreadLabel(count: number): string {
+  return count > 9 ? '9+' : String(count)
+}
+
 async function signOut() {
   await session.logout()
   router.push({ name: 'login' })
@@ -127,21 +148,38 @@ function relative(ms: number): string {
           <span v-if="waves.unreadCount" class="unread-badge">{{ waves.unreadCount }}</span>
         </p>
         <p v-if="!waves.loading && waves.list.length === 0" class="empty">{{ t('becalmed') }}</p>
-        <button
+        <div
           v-for="w in waves.list"
           :key="w.wave"
           class="wave-item"
           :class="{ active: w.wave === props.current, unread: w.unread }"
-          @click="open(w.wave)"
         >
-          <span class="wave-title">
-            <span v-if="w.unread" class="dot" />
-            {{ w.title }}
-          </span>
-          <span class="wave-sub caption">
-            {{ w.participants.map(localPart).join(' · ') }} · {{ relative(w.lastActivityMs) }}
-          </span>
-        </button>
+          <button class="wave-open" @click="open(w.wave)">
+            <span class="wave-title">
+              <span v-if="w.unread && !w.unreadCount" class="dot" />
+              {{ w.title }}
+            </span>
+            <span class="wave-sub caption">
+              {{ w.participants.map(localPart).join(' · ') }} · {{ relative(w.lastActivityMs) }}
+            </span>
+          </button>
+          <span v-if="w.unread && w.unreadCount" class="count-badge">{{
+            unreadLabel(w.unreadCount)
+          }}</span>
+          <DropdownMenuRoot>
+            <DropdownMenuTrigger class="kebab" :aria-label="t('waveMenu')" @click.stop>⋯</DropdownMenuTrigger>
+            <DropdownMenuPortal>
+              <DropdownMenuContent class="menu" align="end" :side-offset="4">
+                <DropdownMenuItem class="menu-item" @select="archiveWave(w.wave)">
+                  ⌸ {{ t('archive') }}
+                </DropdownMenuItem>
+                <DropdownMenuItem class="menu-item danger" @select="deleteWave(w.wave)">
+                  🗑 {{ t('delete') }}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenuPortal>
+          </DropdownMenuRoot>
+        </div>
       </template>
     </div>
 
@@ -174,9 +212,14 @@ function relative(ms: number): string {
 
       <div class="account">
         <span class="addr"
-          ><b>{{ localPart(session.participant ?? '') }}</b></span
+          ><b>{{ session.displayName }}</b></span
         >
-        <button class="btn ghost" @click="signOut">{{ t('signOut') }}</button>
+        <div class="account-actions">
+          <button class="icon-btn" :title="t('settings')" @click="router.push({ name: 'settings' })">
+            ⚙
+          </button>
+          <button class="btn ghost" @click="signOut">{{ t('signOut') }}</button>
+        </div>
       </div>
     </div>
   </aside>
@@ -230,16 +273,12 @@ function relative(ms: number): string {
 
 .wave-item {
   display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
+  align-items: center;
+  gap: 0.2rem;
   width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
   border-radius: 10px;
-  padding: 0.55rem 0.6rem;
+  padding: 0.15rem 0.2rem 0.15rem 0.4rem;
   margin-bottom: 0.15rem;
-  cursor: pointer;
   transition: background 0.12s ease;
 }
 
@@ -250,6 +289,93 @@ function relative(ms: number): string {
 .wave-item.active {
   background: var(--sky-t);
   box-shadow: inset 3px 0 0 var(--deep);
+}
+
+.wave-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0.4rem 0.4rem;
+  cursor: pointer;
+}
+
+.count-badge {
+  flex: none;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--crest);
+  color: #06302b;
+  font-size: 0.66rem;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+}
+
+.kebab {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  color: var(--steel);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.wave-item:hover .kebab,
+.kebab[data-state='open'] {
+  opacity: 1;
+}
+
+.kebab:hover {
+  background: color-mix(in srgb, var(--deep) 12%, transparent);
+  color: var(--deep);
+}
+
+.menu {
+  min-width: 9rem;
+  background: #fff;
+  border: 1px solid var(--mist);
+  border-radius: 10px;
+  box-shadow: var(--shadow-card);
+  padding: 0.3rem;
+  z-index: 40;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  outline: none;
+}
+
+.menu-item[data-highlighted] {
+  background: var(--sky-t);
+}
+
+.menu-item.danger {
+  color: #d33;
+}
+
+.menu-item.danger[data-highlighted] {
+  background: color-mix(in srgb, #d33 12%, #fff);
 }
 
 .wave-title {
@@ -316,6 +442,40 @@ function relative(ms: number): string {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.account .addr {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: none;
+}
+
+.icon-btn {
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 8px;
+  border: 1px solid var(--mist);
+  background: #fff;
+  color: var(--deep);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.icon-btn:hover {
+  background: var(--sky-t);
+  border-color: var(--deep);
 }
 
 .dialog-actions {

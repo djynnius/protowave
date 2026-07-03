@@ -55,6 +55,8 @@ async fn pg_store_full_contract() {
         participant: ada.to_string(),
         password_hash: "phc".into(),
         created_ms: 1,
+        first_name: String::new(),
+        last_name: String::new(),
     };
     assert!(store.create_account(&acct).await.unwrap());
     assert!(!store.create_account(&acct).await.unwrap());
@@ -74,6 +76,7 @@ async fn pg_store_full_contract() {
             last_activity_ms: 1,
             acl_version: 1,
             translation_enabled: false,
+            archived: false,
         })
         .await
         .unwrap();

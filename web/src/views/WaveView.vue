@@ -15,7 +15,17 @@ import { socket, WaveletProvider } from '../lib/provider'
 import { useSession } from '../stores/session'
 import { useWaves } from '../stores/waves'
 import { api, type AttachmentMeta, type ShareMeta } from '../lib/api'
-import { blips, localPart, manifest, postBlip, threadOrder, type BlipEntry } from '../lib/wavemodel'
+import {
+  blips,
+  deleteBlip,
+  isDeleted,
+  localPart,
+  manifest,
+  participantColor,
+  postBlip,
+  threadOrder,
+  type BlipEntry,
+} from '../lib/wavemodel'
 import WaveMesh from '../components/WaveMesh.vue'
 import WaveSidebar from '../components/WaveSidebar.vue'
 import WavePanel from '../components/WavePanel.vue'
@@ -87,8 +97,13 @@ function blipText(id: string): string {
   return (frag?.toString().replace(/<[^>]*>/g, ' ') ?? '').trim()
 }
 
-// Render only blips that carry content (skips the legacy empty root blip).
-const thread = computed(() => threadOrder(entries.value).filter((n) => blipText(n.entry.id).length > 0))
+// Render blips with content, plus deleted ones as tombstones (so their
+// replies stay threaded); skip only empty non-deleted drafts.
+const thread = computed(() =>
+  threadOrder(entries.value).filter(
+    (n) => blipText(n.entry.id).length > 0 || isDeleted(provider.doc, n.entry.id),
+  ),
+)
 
 // ---- autoplay: reveal the conversation message by message ----
 const playing = ref(false)
@@ -241,6 +256,35 @@ function onTag(tag: string) {
   router.push({ name: 'wave', params: { wave: route.params.wave }, query: { q: `#${tag}` } })
 }
 
+function onDelete(id: string) {
+  deleteBlip(provider.doc, id)
+}
+
+// Participant profile card.
+const profileOpen = ref(false)
+const profileData = ref<{
+  participant: string
+  displayName: string
+  sharedWaves: { wave: string; title: string }[]
+} | null>(null)
+async function openProfile(participant: string) {
+  profileOpen.value = true
+  profileData.value = null
+  try {
+    profileData.value = await api.userProfile(participant)
+  } catch {
+    profileData.value = { participant, displayName: localPart(participant), sharedWaves: [] }
+  }
+}
+function goToWave(wave: string) {
+  profileOpen.value = false
+  router.push({ name: 'wave', params: { wave: encodeURIComponent(wave) } })
+}
+
+// Up to 5 participant avatars in the header, then a +N overflow.
+const shownParticipants = computed(() => (digest.value?.participants ?? []).slice(0, 5))
+const overflowParticipants = computed(() => Math.max(0, (digest.value?.participants?.length ?? 0) - 5))
+
 function setLang(code: string) {
   translationLang.value = code
   localStorage.setItem('pw-lang', code)
@@ -292,6 +336,22 @@ async function shareFolder(event: Event) {
           <WaveMesh class="rule" :active="!provider.synced.value || playing" :width="200" />
         </div>
         <div class="head-actions">
+          <div class="avatar-stack">
+            <span
+              v-for="p in shownParticipants"
+              :key="p"
+              class="stack-avatar"
+              :style="{ background: participantColor(p) }"
+              :title="p"
+              role="button"
+              @click="openProfile(p)"
+            >
+              {{ localPart(p).slice(0, 1).toUpperCase() }}
+            </span>
+            <span v-if="overflowParticipants" class="stack-avatar overflow">
+              +{{ overflowParticipants }}
+            </span>
+          </div>
           <button class="btn" :class="{ on: playing }" @click="togglePlay">
             {{ playing ? '⏸ ' + t('stop') : '▶ ' + t('play') }}
           </button>
@@ -345,6 +405,7 @@ async function shareFolder(event: Event) {
           :key="node.entry.id"
           :entry="node.entry"
           :fragment="fragmentOf(node.entry.id)!"
+          :doc="provider.doc"
           :me="me"
           :depth="node.depth"
           :role="roleOf(node.entry.author)"
@@ -353,6 +414,8 @@ async function shareFolder(event: Event) {
           :highlight="highlightId === node.entry.id"
           @reply="startReply"
           @tag="onTag"
+          @delete="onDelete"
+          @profile="openProfile"
         />
       </div>
 
@@ -382,7 +445,29 @@ async function shareFolder(event: Event) {
       @enable-translation="enableTranslation"
       @tag="onTag"
       @add-person="addOpen = true"
+      @profile="openProfile"
     />
+
+    <DialogRoot v-model:open="profileOpen">
+      <DialogPortal>
+        <DialogOverlay class="dialog-overlay" />
+        <DialogContent class="dialog-content">
+          <DialogTitle class="dialog-title">
+            {{ profileData?.displayName ?? '…' }}
+          </DialogTitle>
+          <p v-if="profileData" class="addr">{{ profileData.participant }}</p>
+          <p class="section-label caption" style="margin-top: 1rem">{{ t('sharedWaves') }}</p>
+          <ul v-if="profileData?.sharedWaves.length" class="shared-list">
+            <li v-for="w in profileData.sharedWaves" :key="w.wave">
+              <button class="linkish" @click="goToWave(w.wave)">
+                {{ w.title }}
+              </button>
+            </li>
+          </ul>
+          <p v-else class="empty caption">{{ t('none') }}</p>
+        </DialogContent>
+      </DialogPortal>
+    </DialogRoot>
 
     <DialogRoot v-model:open="addOpen">
       <DialogPortal>
@@ -445,7 +530,60 @@ async function shareFolder(event: Event) {
 
 .head-actions {
   display: flex;
+  align-items: center;
   gap: 0.5rem;
+}
+
+.avatar-stack {
+  display: flex;
+  margin-right: 0.4rem;
+}
+
+.stack-avatar {
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.72rem;
+  border: 2px solid var(--cloud);
+  margin-left: -0.5rem;
+  cursor: pointer;
+}
+
+.stack-avatar:first-child {
+  margin-left: 0;
+}
+
+.stack-avatar.overflow {
+  background: var(--steel);
+  cursor: default;
+}
+
+.shared-list {
+  list-style: none;
+  margin: 0.3rem 0 0;
+  padding: 0;
+}
+
+.shared-list li {
+  padding: 0.2rem 0;
+}
+
+.linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--deep);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.empty {
+  color: var(--steel);
 }
 
 .btn.on {

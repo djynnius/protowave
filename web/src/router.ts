@@ -7,6 +7,7 @@ const router = createRouter({
     { path: '/login', name: 'login', component: () => import('./views/LoginView.vue') },
     { path: '/', name: 'inbox', component: () => import('./views/InboxView.vue') },
     { path: '/w/:wave', name: 'wave', component: () => import('./views/WaveView.vue') },
+    { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue') },
   ],
 })
 

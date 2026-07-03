@@ -155,3 +155,65 @@ export function localPart(participant: string): string {
 export function isAgent(participant: string): boolean {
   return localPart(participant) === 'assistant'
 }
+
+// ---- deletion (tombstones, so threaded replies survive) ----
+
+function deletedSet(doc: Y.Doc): Y.Map<boolean> {
+  return doc.getMap<boolean>('deleted')
+}
+
+export function isDeleted(doc: Y.Doc, id: string): boolean {
+  return deletedSet(doc).get(id) === true
+}
+
+/// Delete a blip: empty its content and tombstone it. The manifest entry
+/// stays so any replies remain threaded under a "(deleted)" placeholder.
+export function deleteBlip(doc: Y.Doc, id: string) {
+  doc.transact(() => {
+    const frag = blips(doc).get(id)
+    if (frag && frag.length > 0) frag.delete(0, frag.length)
+    deletedSet(doc).set(id, true)
+    reactions(doc).delete(id)
+  })
+}
+
+// ---- reactions (in the CRDT, so they sync/federate/replay) ----
+// reactions: Y.Map<blipId, Y.Map<emoji, Y.Map<user, true>>>
+
+export function reactions(doc: Y.Doc): Y.Map<Y.Map<Y.Map<boolean>>> {
+  return doc.getMap('reactions')
+}
+
+export interface ReactionSummary {
+  emoji: string
+  users: string[]
+}
+
+export function readReactions(doc: Y.Doc, blipId: string): ReactionSummary[] {
+  const forBlip = reactions(doc).get(blipId)
+  if (!forBlip) return []
+  const out: ReactionSummary[] = []
+  forBlip.forEach((byUser, emoji) => {
+    const users = [...byUser.keys()]
+    if (users.length) out.push({ emoji, users })
+  })
+  return out
+}
+
+export function toggleReaction(doc: Y.Doc, blipId: string, emoji: string, user: string) {
+  doc.transact(() => {
+    const all = reactions(doc)
+    let forBlip = all.get(blipId)
+    if (!forBlip) {
+      forBlip = new Y.Map()
+      all.set(blipId, forBlip)
+    }
+    let byUser = forBlip.get(emoji)
+    if (!byUser) {
+      byUser = new Y.Map()
+      forBlip.set(emoji, byUser)
+    }
+    if (byUser.get(user)) byUser.delete(user)
+    else byUser.set(user, true)
+  })
+}

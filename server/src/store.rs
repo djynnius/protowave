@@ -31,6 +31,11 @@ pub struct Account {
     /// PHC-format argon2id hash.
     pub password_hash: String,
     pub created_ms: u64,
+    /// Optional real name; when set, the UI shows it instead of the handle.
+    #[serde(default)]
+    pub first_name: String,
+    #[serde(default)]
+    pub last_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +56,9 @@ pub struct WaveMeta {
     /// the translation provider when this is true.
     #[serde(default)]
     pub translation_enabled: bool,
+    /// Hidden from the default inbox when archived.
+    #[serde(default)]
+    pub archived: bool,
 }
 
 /// Attachment metadata (FR-37). The blob itself lives in the CAS keyed by
@@ -110,6 +118,20 @@ pub trait WaveStore: Send + Sync + 'static {
     /// Returns false (without writing) when the account already exists.
     async fn create_account(&self, account: &Account) -> io::Result<bool>;
     async fn get_account(&self, participant: &ParticipantId) -> io::Result<Option<Account>>;
+    async fn set_profile(
+        &self,
+        participant: &ParticipantId,
+        first: &str,
+        last: &str,
+    ) -> io::Result<()>;
+
+    // Server key-value settings (owner marker, runtime model config).
+    async fn get_setting(&self, key: &str) -> io::Result<Option<String>>;
+    async fn put_setting(&self, key: &str, value: &str) -> io::Result<()>;
+    /// Ensure the `owner` marker is set: if absent (e.g. a database created
+    /// before ownership existed), adopt the earliest-registered account.
+    /// Returns the owner, if any account exists. Idempotent.
+    async fn ensure_owner(&self) -> io::Result<Option<String>>;
 
     // Sessions.
     async fn put_session(&self, session_id: &str, participant: &ParticipantId) -> io::Result<()>;
@@ -119,6 +141,7 @@ pub trait WaveStore: Send + Sync + 'static {
     // Wave index.
     async fn put_wave(&self, meta: &WaveMeta) -> io::Result<()>;
     async fn get_wave(&self, wave: &str) -> io::Result<Option<WaveMeta>>;
+    async fn delete_wave(&self, wave: &str) -> io::Result<()>;
     /// Waves the participant is on, most recently active first (FR-28).
     async fn list_waves_for(&self, participant: &ParticipantId) -> io::Result<Vec<WaveMeta>>;
     async fn touch_wave(&self, wave: &str, at_ms: u64) -> io::Result<()>;
@@ -164,6 +187,8 @@ struct Tables {
     peer_keys: HashMap<String, String>,
     #[serde(default)]
     shares: HashMap<String, ShareMeta>,
+    #[serde(default)]
+    settings: HashMap<String, String>,
 }
 
 pub struct FileStore {
@@ -314,6 +339,11 @@ impl WaveStore for FileStore {
         tables
             .accounts
             .insert(account.participant.clone(), account.clone());
+        // First account on this server becomes the owner.
+        tables
+            .settings
+            .entry("owner".into())
+            .or_insert_with(|| account.participant.clone());
         self.flush_tables(&tables)?;
         Ok(true)
     }
@@ -321,6 +351,49 @@ impl WaveStore for FileStore {
     async fn get_account(&self, participant: &ParticipantId) -> io::Result<Option<Account>> {
         let tables = self.tables.lock().unwrap();
         Ok(tables.accounts.get(&participant.to_string()).cloned())
+    }
+
+    async fn set_profile(
+        &self,
+        participant: &ParticipantId,
+        first: &str,
+        last: &str,
+    ) -> io::Result<()> {
+        let mut tables = self.tables.lock().unwrap();
+        if let Some(acct) = tables.accounts.get_mut(&participant.to_string()) {
+            acct.first_name = first.to_string();
+            acct.last_name = last.to_string();
+            self.flush_tables(&tables)?;
+        }
+        Ok(())
+    }
+
+    async fn get_setting(&self, key: &str) -> io::Result<Option<String>> {
+        let tables = self.tables.lock().unwrap();
+        Ok(tables.settings.get(key).cloned())
+    }
+
+    async fn ensure_owner(&self) -> io::Result<Option<String>> {
+        let mut tables = self.tables.lock().unwrap();
+        if let Some(owner) = tables.settings.get("owner") {
+            return Ok(Some(owner.clone()));
+        }
+        let earliest = tables
+            .accounts
+            .values()
+            .min_by_key(|a| a.created_ms)
+            .map(|a| a.participant.clone());
+        if let Some(owner) = &earliest {
+            tables.settings.insert("owner".into(), owner.clone());
+            self.flush_tables(&tables)?;
+        }
+        Ok(earliest)
+    }
+
+    async fn put_setting(&self, key: &str, value: &str) -> io::Result<()> {
+        let mut tables = self.tables.lock().unwrap();
+        tables.settings.insert(key.to_string(), value.to_string());
+        self.flush_tables(&tables)
     }
 
     async fn put_session(&self, session_id: &str, participant: &ParticipantId) -> io::Result<()> {
@@ -351,6 +424,17 @@ impl WaveStore for FileStore {
     async fn get_wave(&self, wave: &str) -> io::Result<Option<WaveMeta>> {
         let tables = self.tables.lock().unwrap();
         Ok(tables.waves.get(wave).cloned())
+    }
+
+    async fn delete_wave(&self, wave: &str) -> io::Result<()> {
+        let mut tables = self.tables.lock().unwrap();
+        tables.waves.remove(wave);
+        tables.shares.retain(|_, s| s.wave != wave);
+        tables.attachments.retain(|_, a| a.wave != wave);
+        for marks in tables.read_marks.values_mut() {
+            marks.remove(wave);
+        }
+        self.flush_tables(&tables)
     }
 
     async fn list_waves_for(&self, participant: &ParticipantId) -> io::Result<Vec<WaveMeta>> {
@@ -501,6 +585,8 @@ mod tests {
             participant: ada.to_string(),
             password_hash: "phc".into(),
             created_ms: 1,
+            first_name: String::new(),
+            last_name: String::new(),
         };
         assert!(store.create_account(&acct).await.unwrap());
         assert!(!store.create_account(&acct).await.unwrap());
@@ -522,6 +608,7 @@ mod tests {
                     last_activity_ms: i as u64,
                     acl_version: 1,
                     translation_enabled: false,
+                    archived: false,
                 })
                 .await
                 .unwrap();

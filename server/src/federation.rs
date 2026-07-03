@@ -579,6 +579,7 @@ pub async fn handle_announce(
         last_activity_ms: now_ms(),
         acl_version: ann.acl_version,
         translation_enabled: ann.translation_enabled,
+        archived: false,
     };
     state.store.put_wave(&meta).await?;
     tracing::info!(wave = %ann.wave, home = %peer, "wave announced by home server");

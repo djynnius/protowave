@@ -153,6 +153,8 @@ pub async fn register(
             participant: participant.to_string(),
             password_hash: hash,
             created_ms: now_ms(),
+            first_name: String::new(),
+            last_name: String::new(),
         })
         .await?;
     if !created {
@@ -198,8 +200,20 @@ pub async fn logout(
     ))
 }
 
-pub async fn me(CurrentUser(participant): CurrentUser) -> Json<SessionResponse> {
-    Json(SessionResponse {
-        participant: participant.to_string(),
-    })
+pub async fn me(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(participant): CurrentUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (first, last) = state
+        .store
+        .get_account(&participant)
+        .await?
+        .map(|a| (a.first_name, a.last_name))
+        .unwrap_or_default();
+    Ok(Json(serde_json::json!({
+        "participant": participant.to_string(),
+        "firstName": first,
+        "lastName": last,
+        "isOwner": crate::settings::is_owner(&state, &participant).await,
+    })))
 }

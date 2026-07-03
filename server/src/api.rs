@@ -33,8 +33,11 @@ pub struct WaveDigest {
     #[serde(rename = "lastActivityMs")]
     pub last_activity_ms: u64,
     pub unread: bool,
+    #[serde(rename = "unreadCount")]
+    pub unread_count: u32,
     #[serde(rename = "translationEnabled")]
     pub translation_enabled: bool,
+    pub archived: bool,
 }
 
 impl WaveDigest {
@@ -42,6 +45,7 @@ impl WaveDigest {
         let root_wavelet = format!("{}/{ROOT_WAVELET}", meta.wave);
         Self {
             unread: meta.last_activity_ms > read_mark,
+            unread_count: 0,
             wave: meta.wave,
             title: meta.title,
             participants: meta.participants,
@@ -49,6 +53,7 @@ impl WaveDigest {
             created_by: meta.created_by,
             last_activity_ms: meta.last_activity_ms,
             translation_enabled: meta.translation_enabled,
+            archived: meta.archived,
         }
     }
 }
@@ -88,6 +93,7 @@ pub async fn create_wave(
         last_activity_ms: now,
         acl_version: 1,
         translation_enabled: false,
+        archived: false,
     };
     state.store.put_wave(&meta).await?;
     // Index the title + its tags immediately so a fresh wave is searchable
@@ -108,15 +114,35 @@ pub async fn list_waves(
 ) -> Result<Json<Vec<WaveDigest>>, ApiError> {
     let waves = state.store.list_waves_for(&me).await?;
     let marks = state.store.read_marks(&me).await?;
-    Ok(Json(
-        waves
-            .into_iter()
-            .map(|meta| {
-                let mark = marks.get(&meta.wave).copied().unwrap_or(0);
-                WaveDigest::new(meta, mark)
-            })
-            .collect(),
-    ))
+    let mut digests = Vec::with_capacity(waves.len());
+    for meta in waves.into_iter().filter(|m| !m.archived) {
+        // archived waves drop out of the inbox
+        let mark = marks.get(&meta.wave).copied().unwrap_or(0);
+        let mut digest = WaveDigest::new(meta, mark);
+        // Only pay to open the wavelet and tally blips when there's actually
+        // something new — a read wave contributes zero without touching it.
+        if digest.unread {
+            digest.unread_count = unread_blips(&state, &digest.wave, mark).await;
+        }
+        digests.push(digest);
+    }
+    Ok(Json(digests))
+}
+
+/// Count conversation blips newer than the reader's last-read timestamp.
+/// Best-effort: a wavelet that won't open (or parse) just reports 0.
+async fn unread_blips(state: &Arc<AppState>, wave: &str, since_ms: u64) -> u32 {
+    let Ok(name) = format!("{wave}/{ROOT_WAVELET}").parse::<WaveletName>() else {
+        return 0;
+    };
+    match state.engine.open_wavelet(&name).await {
+        Ok(live) => live
+            .blips_detailed()
+            .iter()
+            .filter(|b| b.ts > since_ms)
+            .count() as u32,
+        Err(_) => 0,
+    }
 }
 
 #[derive(Deserialize)]
@@ -212,6 +238,134 @@ pub async fn set_translation(
         crate::federation::spawn_announce(state.clone(), meta.clone());
     }
     Ok(Json(WaveDigest::new(meta, u64::MAX)))
+}
+
+// ---- archive / delete (participant / creator on the home server) ----
+
+#[derive(Deserialize)]
+pub struct ArchiveRequest {
+    pub wave: String,
+    pub archived: bool,
+}
+
+pub async fn archive_wave(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(me): CurrentUser,
+    Json(req): Json<ArchiveRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let mut meta = state
+        .store
+        .get_wave(&req.wave)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such wave".into()))?;
+    if !meta.participants.contains(&me.to_string()) {
+        return Err(ApiError(StatusCode::FORBIDDEN, "not a participant".into()));
+    }
+    meta.archived = req.archived;
+    state.store.put_wave(&meta).await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct DeleteWaveRequest {
+    pub wave: String,
+}
+
+pub async fn delete_wave(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(me): CurrentUser,
+    Json(req): Json<DeleteWaveRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let meta = state
+        .store
+        .get_wave(&req.wave)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such wave".into()))?;
+    // Only the creator may delete, and only on the wave's home server.
+    let home = meta.wave.split('/').next().unwrap_or_default();
+    if home != state.domain {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "delete on the wave's home server".into(),
+        ));
+    }
+    if meta.created_by != me.to_string() {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "only the creator can delete this wave".into(),
+        ));
+    }
+    state.store.delete_wave(&req.wave).await?;
+    tracing::info!(wave = %req.wave, by = %me, "wave deleted");
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---- profiles ----
+
+#[derive(Deserialize)]
+pub struct ProfileRequest {
+    #[serde(rename = "firstName")]
+    pub first_name: String,
+    #[serde(rename = "lastName")]
+    pub last_name: String,
+}
+
+pub async fn set_profile(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(me): CurrentUser,
+    Json(req): Json<ProfileRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let first = req.first_name.trim();
+    let last = req.last_name.trim();
+    if first.len() > 60 || last.len() > 60 {
+        return Err(ApiError::bad_request("name too long"));
+    }
+    state.store.set_profile(&me, first, last).await?;
+    Ok(Json(serde_json::json!({
+        "firstName": first, "lastName": last,
+    })))
+}
+
+fn display_name(a: &crate::store::Account) -> String {
+    let full = format!("{} {}", a.first_name, a.last_name);
+    let full = full.trim();
+    if full.is_empty() {
+        a.participant.split('@').next().unwrap_or("").to_string()
+    } else {
+        full.to_string()
+    }
+}
+
+/// Public profile of a participant: name plus the waves we both share.
+pub async fn user_profile(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(me): CurrentUser,
+    axum::extract::Path(participant): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let pid: ParticipantId = participant
+        .parse()
+        .map_err(|_| ApiError::bad_request("bad participant"))?;
+    // Names are only known for local accounts; remote users show their handle.
+    let (first, last, display) = match state.store.get_account(&pid).await? {
+        Some(a) => (a.first_name.clone(), a.last_name.clone(), display_name(&a)),
+        None => (String::new(), String::new(), pid.local().to_string()),
+    };
+    let target = pid.to_string();
+    let shared: Vec<serde_json::Value> = state
+        .store
+        .list_waves_for(&me)
+        .await?
+        .into_iter()
+        .filter(|w| !w.archived && w.participants.contains(&target))
+        .map(|w| serde_json::json!({ "wave": w.wave, "title": w.title }))
+        .collect();
+    Ok(Json(serde_json::json!({
+        "participant": target,
+        "firstName": first,
+        "lastName": last,
+        "displayName": display,
+        "sharedWaves": shared,
+    })))
 }
 
 // ---- read marks (FR-8) ----

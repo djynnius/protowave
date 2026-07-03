@@ -8,7 +8,9 @@ export interface WaveDigest {
   createdBy: string
   lastActivityMs: number
   unread: boolean
+  unreadCount: number
   translationEnabled: boolean
+  archived?: boolean
 }
 
 export interface AttachmentMeta {
@@ -77,7 +79,10 @@ export const api = {
       body: JSON.stringify({ name, password }),
     }),
   logout: () => request<{ ok: boolean }>('/api/logout', { method: 'POST' }),
-  me: () => request<{ participant: string }>('/api/me'),
+  me: () =>
+    request<{ participant: string; firstName?: string; lastName?: string; isOwner?: boolean }>(
+      '/api/me',
+    ),
   listWaves: () => request<WaveDigest[]>('/api/waves'),
   createWave: (title: string) =>
     request<WaveDigest>('/api/waves', { method: 'POST', body: JSON.stringify({ title }) }),
@@ -85,6 +90,43 @@ export const api = {
     request<WaveDigest>('/api/waves/participants', {
       method: 'POST',
       body: JSON.stringify({ wave, participant }),
+    }),
+  archiveWave: (wave: string, archived: boolean) =>
+    request<{ ok: boolean }>('/api/waves/archive', {
+      method: 'POST',
+      body: JSON.stringify({ wave, archived }),
+    }),
+  deleteWave: (wave: string) =>
+    request<{ ok: boolean }>('/api/waves/delete', {
+      method: 'POST',
+      body: JSON.stringify({ wave }),
+    }),
+  setProfile: (firstName: string, lastName: string) =>
+    request<{ firstName: string; lastName: string }>('/api/profile', {
+      method: 'POST',
+      body: JSON.stringify({ firstName, lastName }),
+    }),
+  userProfile: (participant: string) =>
+    request<{
+      participant: string
+      firstName: string
+      lastName: string
+      displayName: string
+      sharedWaves: { wave: string; title: string }[]
+    }>(`/api/users/${encodeURIComponent(participant)}`),
+  getSettings: () =>
+    request<{
+      domain: string
+      inferenceProvider: string
+      inferenceBase: string
+      inferenceModel: string
+      activeModel: string
+      geminiKeyPresent: boolean
+    }>('/api/settings'),
+  putSettings: (provider: string, base: string, model: string) =>
+    request<{ ok: boolean; activeModel: string }>('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ provider, base, model }),
     }),
   ask: (wave: string, prompt: string) =>
     request<{ answer: string; model: string; agent: string }>('/api/waves/ask', {

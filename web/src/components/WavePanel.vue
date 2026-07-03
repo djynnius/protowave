@@ -3,8 +3,10 @@
 // tags. Presentational — the parent owns the state and handles the events.
 import { useI18n } from 'vue-i18n'
 import { localPart, participantColor, isAgent } from '../lib/wavemodel'
+import { useProfiles } from '../stores/profiles'
 
 const { t } = useI18n()
+const profiles = useProfiles()
 
 defineProps<{
   participants: string[]
@@ -21,6 +23,7 @@ const emit = defineEmits<{
   enableTranslation: []
   tag: [tag: string]
   addPerson: []
+  profile: [participant: string]
 }>()
 </script>
 
@@ -32,7 +35,7 @@ const emit = defineEmits<{
         <button class="add-btn" :title="t('addCrew')" @click="emit('addPerson')">+</button>
       </div>
       <ul class="people">
-        <li v-for="p in participants" :key="p" class="person">
+        <li v-for="p in participants" :key="p" class="person" @click="emit('profile', p)">
           <span
             class="avatar"
             :class="{ 'avatar-agent': isAgent(p) }"
@@ -42,7 +45,7 @@ const emit = defineEmits<{
             <span v-if="online.has(localPart(p))" class="presence" />
           </span>
           <span class="pname">
-            {{ localPart(p) }}
+            {{ isAgent(p) ? 'assistant' : profiles.nameOf(p) }}
             <span class="prole caption">{{ p === owner ? 'owner' : 'editor' }}</span>
           </span>
         </li>
@@ -132,6 +135,11 @@ const emit = defineEmits<{
   display: flex;
   align-items: center;
   gap: 0.6rem;
+  cursor: pointer;
+}
+
+.person:hover .pname {
+  text-decoration: underline;
 }
 
 .avatar {

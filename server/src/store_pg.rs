@@ -67,6 +67,10 @@ CREATE INDEX IF NOT EXISTS attachments_wave ON attachments (wave);
 CREATE INDEX IF NOT EXISTS waves_activity ON waves (last_activity_ms DESC);
 ALTER TABLE waves ADD COLUMN IF NOT EXISTS acl_version BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE waves ADD COLUMN IF NOT EXISTS translation_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE waves ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS first_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS last_name TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS peer_keys (
     domain TEXT PRIMARY KEY,
     public_key TEXT NOT NULL
@@ -135,6 +139,7 @@ impl PgStore {
             last_activity_ms: row.get::<_, i64>("last_activity_ms") as u64,
             acl_version: row.get::<_, i64>("acl_version") as u64,
             translation_enabled: row.get("translation_enabled"),
+            archived: row.get("archived"),
         }
     }
 }
@@ -248,6 +253,17 @@ impl WaveStore for PgStore {
             )
             .await
             .map_err(db_err)?;
+        if n == 1 {
+            // First account becomes the owner.
+            client
+                .execute(
+                    "INSERT INTO settings (key, value) VALUES ('owner', $1)
+                     ON CONFLICT (key) DO NOTHING",
+                    &[&account.participant],
+                )
+                .await
+                .map_err(db_err)?;
+        }
         Ok(n == 1)
     }
 
@@ -255,7 +271,8 @@ impl WaveStore for PgStore {
         let client = self.client().await?;
         let row = client
             .query_opt(
-                "SELECT participant, password_hash, created_ms FROM accounts WHERE participant = $1",
+                "SELECT participant, password_hash, created_ms, first_name, last_name
+                 FROM accounts WHERE participant = $1",
                 &[&participant.to_string()],
             )
             .await
@@ -264,7 +281,68 @@ impl WaveStore for PgStore {
             participant: r.get("participant"),
             password_hash: r.get("password_hash"),
             created_ms: r.get::<_, i64>("created_ms") as u64,
+            first_name: r.get("first_name"),
+            last_name: r.get("last_name"),
         }))
+    }
+
+    async fn set_profile(
+        &self,
+        participant: &ParticipantId,
+        first: &str,
+        last: &str,
+    ) -> io::Result<()> {
+        let client = self.client().await?;
+        client
+            .execute(
+                "UPDATE accounts SET first_name = $2, last_name = $3 WHERE participant = $1",
+                &[&participant.to_string(), &first, &last],
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn get_setting(&self, key: &str) -> io::Result<Option<String>> {
+        let client = self.client().await?;
+        let row = client
+            .query_opt("SELECT value FROM settings WHERE key = $1", &[&key])
+            .await
+            .map_err(db_err)?;
+        Ok(row.map(|r| r.get(0)))
+    }
+
+    async fn put_setting(&self, key: &str, value: &str) -> io::Result<()> {
+        let client = self.client().await?;
+        client
+            .execute(
+                "INSERT INTO settings (key, value) VALUES ($1, $2)
+                 ON CONFLICT (key) DO UPDATE SET value = $2",
+                &[&key, &value],
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn ensure_owner(&self) -> io::Result<Option<String>> {
+        let client = self.client().await?;
+        // Adopt the earliest account as owner only if none is recorded yet.
+        client
+            .execute(
+                "INSERT INTO settings (key, value)
+                 SELECT 'owner', participant FROM accounts
+                 ORDER BY created_ms ASC LIMIT 1
+                 ON CONFLICT (key) DO NOTHING",
+                &[],
+            )
+            .await
+            .map_err(db_err)?;
+        let row = client
+            .query_opt("SELECT value FROM settings WHERE key = 'owner'", &[])
+            .await
+            .map_err(db_err)?;
+        Ok(row.map(|r| r.get(0)))
     }
 
     async fn put_session(&self, session_id: &str, participant: &ParticipantId) -> io::Result<()> {
@@ -305,10 +383,10 @@ impl WaveStore for PgStore {
         let client = self.client().await?;
         client
             .execute(
-                "INSERT INTO waves (wave, title, participants, created_by, created_ms, last_activity_ms, acl_version, translation_enabled)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                "INSERT INTO waves (wave, title, participants, created_by, created_ms, last_activity_ms, acl_version, translation_enabled, archived)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                  ON CONFLICT (wave) DO UPDATE SET
-                    title = $2, participants = $3, last_activity_ms = $6, acl_version = $7, translation_enabled = $8",
+                    title = $2, participants = $3, last_activity_ms = $6, acl_version = $7, translation_enabled = $8, archived = $9",
                 &[
                     &meta.wave,
                     &meta.title,
@@ -318,6 +396,7 @@ impl WaveStore for PgStore {
                     &(meta.last_activity_ms as i64),
                     &(meta.acl_version as i64),
                     &meta.translation_enabled,
+                    &meta.archived,
                 ],
             )
             .await
@@ -332,6 +411,19 @@ impl WaveStore for PgStore {
             .await
             .map_err(db_err)?;
         Ok(row.as_ref().map(Self::row_to_wave))
+    }
+
+    async fn delete_wave(&self, wave: &str) -> io::Result<()> {
+        let client = self.client().await?;
+        for sql in [
+            "DELETE FROM waves WHERE wave = $1",
+            "DELETE FROM shares WHERE wave = $1",
+            "DELETE FROM attachments WHERE wave = $1",
+            "DELETE FROM read_marks WHERE wave = $1",
+        ] {
+            client.execute(sql, &[&wave]).await.map_err(db_err)?;
+        }
+        Ok(())
     }
 
     async fn list_waves_for(&self, participant: &ParticipantId) -> io::Result<Vec<WaveMeta>> {

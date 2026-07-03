@@ -1,22 +1,33 @@
 <script setup lang="ts">
-// A conversation message, rendered read-only (the mockup's chat model — you
-// compose new blips in the bottom composer, not by editing inline). Still a
-// live CRDT view: a read-only Tiptap bound to the fragment updates in place
-// as it syncs, and keeps #tag/@mention chips and the translation overlay.
+// A conversation message, rendered read-only unless it's your own (then an
+// ✎ Edit / ✓ Done toggle makes it editable). Own posts can also be deleted
+// (tombstoned so replies survive). Reactions live in the CRDT. Names show
+// real first/last when the author has set a profile.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Editor, EditorContent } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import Collaboration from '@tiptap/extension-collaboration'
 import type * as Y from 'yjs'
 import { useI18n } from 'vue-i18n'
-import { isAgent, localPart, participantColor, type BlipEntry } from '../lib/wavemodel'
+import { useProfiles } from '../stores/profiles'
+import {
+  isAgent,
+  isDeleted,
+  localPart,
+  participantColor,
+  readReactions,
+  toggleReaction,
+  type BlipEntry,
+} from '../lib/wavemodel'
 import { TagsMentions } from '../lib/tiptap-decorations'
 
 const { t } = useI18n()
+const profiles = useProfiles()
 
 const props = defineProps<{
   entry: BlipEntry
   fragment: Y.XmlFragment
+  doc: Y.Doc
   me: string
   depth: number
   role?: string
@@ -25,13 +36,29 @@ const props = defineProps<{
   highlight?: boolean
 }>()
 
-const emit = defineEmits<{ reply: [id: string]; tag: [tag: string] }>()
+const emit = defineEmits<{
+  reply: [id: string]
+  tag: [tag: string]
+  delete: [id: string]
+  profile: [participant: string]
+}>()
 
 const agent = computed(() => isAgent(props.entry.author))
-// Only your own (non-agent) posts can be edited inline.
 const own = computed(() => !agent.value && props.entry.author === props.me)
+const deleted = ref(isDeleted(props.doc, props.entry.id))
 const editing = ref(false)
+const showPicker = ref(false)
 const root = ref<HTMLElement | null>(null)
+const name = computed(() =>
+  agent.value ? 'assistant' : profiles.nameOf(props.entry.author),
+)
+
+const EMOJI = ['👍', '🎉', '🌊', '❤️', '😂', '👀', '✅']
+const reacts = ref(readReactions(props.doc, props.entry.id))
+function refreshReactions() {
+  reacts.value = readReactions(props.doc, props.entry.id)
+  deleted.value = isDeleted(props.doc, props.entry.id)
+}
 
 const editor = new Editor({
   editable: false,
@@ -42,20 +69,14 @@ const editor = new Editor({
   ],
 })
 
-// Toggle edit mode: edits write straight to the shared fragment, so they
-// sync, persist and federate like any change.
+// Reactions/tombstones change outside this editor; observe the shared maps.
+props.doc.getMap('reactions').observeDeep(refreshReactions)
+props.doc.getMap('deleted').observe(refreshReactions)
+
 watch(editing, (on) => {
   editor.setEditable(on)
   if (on) editor.commands.focus('end')
 })
-
-function toggleEdit() {
-  editing.value = !editing.value
-}
-
-onBeforeUnmount(() => editor.destroy())
-
-// Centre this message when it becomes the reply target (or during autoplay).
 watch(
   () => props.highlight,
   (on) => {
@@ -63,11 +84,28 @@ watch(
   },
 )
 
+function toggleEdit() {
+  editing.value = !editing.value
+}
+function react(emoji: string) {
+  toggleReaction(props.doc, props.entry.id, emoji, localPart(props.me))
+  showPicker.value = false
+  refreshReactions()
+}
 function onClick(event: MouseEvent) {
-  if (editing.value) return // let clicks place the cursor while editing
+  if (editing.value) return
   const el = (event.target as HTMLElement).closest('.pw-tag')
   if (el) emit('tag', (el.getAttribute('data-token') || '').replace(/^#/, ''))
 }
+function reactedByMe(r: { users: string[] }): boolean {
+  return r.users.includes(localPart(props.me))
+}
+
+onBeforeUnmount(() => {
+  props.doc.getMap('reactions').unobserveDeep(refreshReactions)
+  props.doc.getMap('deleted').unobserve(refreshReactions)
+  editor.destroy()
+})
 
 function timeOf(ts: number): string {
   const delta = Date.now() - ts
@@ -76,15 +114,13 @@ function timeOf(ts: number): string {
   if (delta < 86_400_000) return t('hoursAgo', { n: Math.floor(delta / 3_600_000) })
   return new Date(ts).toLocaleDateString()
 }
-
-defineExpose({ root })
 </script>
 
 <template>
   <article
     ref="root"
     class="msg"
-    :class="{ agent, replying, highlight, editing }"
+    :class="{ agent, replying, highlight, editing, deleted }"
     :style="{ '--depth': depth }"
   >
     <span
@@ -92,27 +128,54 @@ defineExpose({ root })
       :class="{ 'avatar-agent': agent }"
       :style="agent ? undefined : { background: participantColor(entry.author) }"
       :title="entry.author"
+      role="button"
+      @click="emit('profile', entry.author)"
     >
       {{ agent ? '✳' : localPart(entry.author).slice(0, 1).toUpperCase() }}
     </span>
     <div class="body">
       <header class="byline">
-        <span class="author">{{ localPart(entry.author) }}</span>
+        <span class="author" role="button" @click="emit('profile', entry.author)">{{ name }}</span>
         <span v-if="agent" class="tag tag-agent">assistant</span>
         <span class="role caption">{{ role || 'editor' }} · {{ timeOf(entry.ts) }}</span>
       </header>
-      <!-- eslint-disable-next-line vue/no-v-html -->
-      <EditorContent :editor="editor" class="blip-editor" @click="onClick" />
-      <div v-if="translation" class="translation">
-        <span class="tag tag-dusk">{{ t('translated') }}</span>
-        <p>{{ translation }}</p>
-      </div>
-      <div class="actions">
-        <button class="act" @click="emit('reply', entry.id)">↳ {{ t('reply') }}</button>
-        <button v-if="own" class="act" @click="toggleEdit">
-          {{ editing ? '✓ ' + t('done') : '✎ ' + t('edit') }}
-        </button>
-      </div>
+
+      <p v-if="deleted" class="tombstone">{{ t('messageDeleted') }}</p>
+      <template v-else>
+        <EditorContent :editor="editor" class="blip-editor" @click="onClick" />
+        <div v-if="translation" class="translation">
+          <span class="tag tag-dusk">{{ t('translated') }}</span>
+          <p>{{ translation }}</p>
+        </div>
+
+        <div v-if="reacts.length" class="reactions">
+          <button
+            v-for="r in reacts"
+            :key="r.emoji"
+            class="reaction"
+            :class="{ mine: reactedByMe(r) }"
+            @click="react(r.emoji)"
+          >
+            {{ r.emoji }} {{ r.users.length }}
+          </button>
+        </div>
+
+        <div class="actions">
+          <button class="act" @click="emit('reply', entry.id)">↳ {{ t('reply') }}</button>
+          <span class="react-wrap">
+            <button class="act" @click="showPicker = !showPicker">☺ {{ t('react') }}</button>
+            <span v-if="showPicker" class="picker">
+              <button v-for="e in EMOJI" :key="e" class="emoji" @click="react(e)">{{ e }}</button>
+            </span>
+          </span>
+          <button v-if="own" class="act" @click="toggleEdit">
+            {{ editing ? '✓ ' + t('done') : '✎ ' + t('edit') }}
+          </button>
+          <button v-if="own" class="act danger" @click="emit('delete', entry.id)">
+            🗑 {{ t('delete') }}
+          </button>
+        </div>
+      </template>
     </div>
   </article>
 </template>
@@ -184,6 +247,7 @@ defineExpose({ root })
   font-size: 0.9rem;
   box-shadow: 0 2px 6px rgba(11, 27, 43, 0.15);
   user-select: none;
+  cursor: pointer;
 }
 
 .avatar-agent {
@@ -205,6 +269,17 @@ defineExpose({ root })
 .author {
   font-weight: 700;
   font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.author:hover {
+  text-decoration: underline;
+}
+
+.tombstone {
+  color: var(--steel);
+  font-style: italic;
+  margin: 0.2rem 0;
 }
 
 .translation {
@@ -220,8 +295,33 @@ defineExpose({ root })
   font-size: 0.92rem;
 }
 
+.reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+}
+
+.reaction {
+  border: 1px solid var(--mist);
+  background: #fff;
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.reaction.mine {
+  border-color: var(--deep);
+  background: var(--sky-t);
+  color: var(--deep);
+}
+
 .actions {
-  margin-top: 0.15rem;
+  margin-top: 0.2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
   opacity: 0;
   transition: opacity 0.15s ease;
 }
@@ -240,5 +340,39 @@ defineExpose({ root })
   font-weight: 600;
   cursor: pointer;
   padding: 0.15rem 0;
+}
+
+.act.danger {
+  color: #d33;
+}
+
+.react-wrap {
+  position: relative;
+}
+
+.picker {
+  position: absolute;
+  bottom: 1.4rem;
+  left: 0;
+  display: flex;
+  gap: 0.1rem;
+  background: #fff;
+  border: 1px solid var(--mist);
+  border-radius: 999px;
+  padding: 0.2rem 0.35rem;
+  box-shadow: var(--shadow-card);
+  z-index: 5;
+}
+
+.emoji {
+  background: none;
+  border: none;
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0.1rem;
+}
+
+.emoji:hover {
+  transform: scale(1.2);
 }
 </style>

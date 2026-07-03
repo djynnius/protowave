@@ -11,6 +11,7 @@ pub mod engine;
 pub mod federation;
 pub mod limits;
 pub mod search;
+pub mod settings;
 pub mod shares;
 pub mod store;
 pub mod store_pg;
@@ -100,6 +101,20 @@ impl AppState {
         spawn_search_indexer(state.clone());
         translate::spawn_translation_worker(state.clone());
         agent::spawn_mention_worker(state.clone());
+        // Persisted owner-set model config overrides the env defaults.
+        // Backfill the owner marker first so servers whose accounts predate
+        // ownership still have a settled owner (earliest registrant).
+        {
+            let state = state.clone();
+            tokio::spawn(async move {
+                match state.store.ensure_owner().await {
+                    Ok(Some(owner)) => tracing::info!(%owner, "server owner"),
+                    Ok(None) => tracing::info!("server owner: none yet (no accounts)"),
+                    Err(e) => tracing::warn!(err = %e, "owner backfill failed"),
+                }
+                settings::apply_persisted(&state).await;
+            });
+        }
         Ok(state)
     }
 
@@ -182,7 +197,15 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route("/api/waves/participants", post(api::add_participant))
         .route("/api/waves/read", post(api::mark_read))
         .route("/api/waves/translation", post(api::set_translation))
+        .route("/api/waves/archive", post(api::archive_wave))
+        .route("/api/waves/delete", post(api::delete_wave))
         .route("/api/waves/ask", post(agent::ask))
+        .route("/api/profile", post(api::set_profile))
+        .route("/api/users/:participant", get(api::user_profile))
+        .route(
+            "/api/settings",
+            get(settings::get_settings).put(settings::put_settings),
+        )
         .route("/api/admin/stats", get(limits::admin_stats))
         .route("/api/history", get(api::history))
         .route("/api/search", get(api::search))
