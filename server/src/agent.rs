@@ -180,7 +180,13 @@ impl InferenceProvider for OllamaInference {
         let status = res.status();
         let bytes = res.into_body().collect().await.map_err(other)?.to_bytes();
         if !status.is_success() {
-            return Err(other(format!("ollama: {status}")));
+            // Surface Ollama's own message (e.g. "model 'x' not found") rather
+            // than a bare status — the model tag must match `ollama list`.
+            let detail = serde_json::from_slice::<serde_json::Value>(&bytes)
+                .ok()
+                .and_then(|j| j["error"].as_str().map(str::to_string))
+                .unwrap_or_else(|| String::from_utf8_lossy(&bytes).chars().take(200).collect());
+            return Err(other(format!("ollama {status}: {detail}")));
         }
         let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(other)?;
         json["response"]
