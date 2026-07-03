@@ -76,6 +76,13 @@ const en = {
   askPlaceholder: 'Ask the assistant about this wave…',
   thinking: 'thinking…',
   answeredBy: 'answered by {model} · verify before relying on it',
+  mostRecent: 'most recent',
+  participants: 'Participants',
+  trending: 'Trending',
+  play: 'Play',
+  stop: 'Stop',
+  isWriting: 'is writing a blip…',
+  pickAWave: 'Pick a wave on the left, or start a new one.',
 }
 
 const de: typeof en = {

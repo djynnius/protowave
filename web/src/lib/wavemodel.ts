@@ -4,6 +4,8 @@
 //                                             pointers; rendered as a tree)
 
 import * as Y from 'yjs'
+import { prosemirrorToYXmlFragment } from 'y-prosemirror'
+import type { Node as PMNode } from '@tiptap/pm/model'
 
 export const ROOT_BLIP = 'b+root'
 
@@ -35,6 +37,25 @@ export function addReply(doc: Y.Doc, author: string, parent: string): string {
   const id = `b+${Math.random().toString(36).slice(2, 10)}`
   doc.transact(() => {
     blips(doc).set(id, new Y.XmlFragment())
+    manifest(doc).push([{ id, author, ts: Date.now(), parent }])
+  })
+  return id
+}
+
+/// Post a new blip from composed ProseMirror content (the bottom composer's
+/// "send"). The PM doc is converted to a Y.XmlFragment and dropped into the
+/// blips map, so it syncs, plays back, translates and federates like any
+/// blip. `parent` is the replied-to blip, or the root for a top-level post.
+export function postBlip(
+  doc: Y.Doc,
+  author: string,
+  parent: string | null,
+  content: PMNode,
+): string {
+  const id = `b+${Math.random().toString(36).slice(2, 10)}`
+  const fragment = prosemirrorToYXmlFragment(content) as Y.XmlFragment
+  doc.transact(() => {
+    blips(doc).set(id, fragment)
     manifest(doc).push([{ id, author, ts: Date.now(), parent }])
   })
   return id

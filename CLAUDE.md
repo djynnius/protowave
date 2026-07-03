@@ -90,10 +90,19 @@ protoc**. Consequences:
   (tantivy behind `SearchIndex` trait, fed by engine change stream), `cas`
   (BLAKE3 content-addressed blobs), `ws`, `auth` (argon2id + cookie
   sessions; WS authenticates at upgrade), `attachments`, `api`.
-- `web/` — Vue 3 + TS + Pinia + Reka UI. Editor: Tiptap 2 + y-prosemirror
-  bound to `Y.XmlFragment`s in the `blips` map; thread tree in `manifest`
-  (see `src/lib/wavemodel.ts`, mirrors PRD §4.3). Custom provider over the
-  envelope protocol in `src/lib/provider.ts`.
+- `web/` — Vue 3 + TS + Pinia + Reka UI. **UI built from the user's
+  `ProtoWave App (standalone).html` mockup**: three-column app shell
+  (WaveSidebar / conversation / WavePanel) rendered by `views/WaveView.vue`;
+  `/` (InboxView) redirects to the newest wave. Chat interaction model:
+  existing blips render read-only (`BlipMessage.vue`, still live CRDT views),
+  new blips are composed in the bottom `Composer.vue` and posted via
+  `wavemodel.postBlip` (prosemirrorToYXmlFragment → new blip). Reply sets a
+  quote bar + centres the target; ▶ Play autoplays the conversation by
+  revealing blips in sequence. Typing broadcasts an awareness `typing` flag.
+  Blips are Y.XmlFragments in the `blips` map; thread tree in `manifest`
+  (`src/lib/wavemodel.ts`, PRD §4.3). Provider in `src/lib/provider.ts`.
+  (The old inline-editor BlipEditor.vue and history-scrub PlaybackDrawer.vue
+  were removed in the chat-model rework.)
 - Design language: **ProtoWave Brand v2** (source of truth: `pw-theme/`) —
   luminous blues (Crest/Spray/Deep/Dusk over ink/slate/cloud), Archivo 900
   display + Hanken Grotesk body + JetBrains Mono captions, pill buttons,
