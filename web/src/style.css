@@ -353,6 +353,32 @@ a {
   color: var(--slate);
 }
 
+/* #tags and @mentions — decoration chips inside blip editors. */
+.pw-tag {
+  color: var(--deep);
+  background: var(--sky-t);
+  border-radius: 5px;
+  padding: 0 0.2em;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pw-tag:hover {
+  background: color-mix(in srgb, var(--deep) 18%, var(--sky-t));
+}
+
+.pw-mention {
+  color: var(--dusk);
+  font-weight: 600;
+}
+
+.pw-mention-agent {
+  background: linear-gradient(135deg, var(--crest), var(--deep));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
 /* Remote collaborator carets (y-prosemirror). */
 .collaboration-cursor__caret {
   border-left: 2px solid;

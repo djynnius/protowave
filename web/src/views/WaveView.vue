@@ -215,6 +215,10 @@ function reply(parent: string) {
   addReply(provider.doc, me.value, parent)
 }
 
+function onTag(tag: string) {
+  router.push({ name: 'inbox', query: { q: `#${tag}` } })
+}
+
 async function addParticipant() {
   addError.value = ''
   const name = addName.value.trim()
@@ -454,6 +458,7 @@ async function uploadFile(event: Event) {
           :depth="node.depth"
           :translation="translationLang ? provider.translations.value[node.entry.id] : undefined"
           @reply="reply"
+          @tag="onTag"
         />
       </div>
     </section>

@@ -39,6 +39,11 @@ npm run build          # type-check + production build
 
 ## Status
 
+**#tags & @mentions.** Type `#tags` and `@mentions` in any blip — they
+render as chips; clicking a tag searches every wave you can see for it, and
+titles carry tags too. Mentioning `@assistant` in a blip makes the wave
+agent answer inline (in addition to the ✳ ask bar).
+
 **Phase 7 (Hive Mind — exploratory).** Waves have an assistant: ✳ ask it
 about the wave and it answers as a real message (a blip), grounded in the
 conversation, your accessible waves (full-text retrieval), and the wave's

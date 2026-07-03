@@ -14,9 +14,18 @@ use tokio::sync::{broadcast, mpsc};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::Out;
-use yrs::{Doc, GetString, Map, ReadTxn, StateVector, Transact, Update};
+use yrs::{Any, Array, Doc, GetString, Map, ReadTxn, StateVector, Transact, Update};
 
 use protowave_core::WaveletName;
+
+/// A blip with its manifest metadata.
+#[derive(Debug, Clone)]
+pub struct BlipInfo {
+    pub id: String,
+    pub author: String,
+    pub ts: u64,
+    pub text: String,
+}
 
 use crate::store::{now_ms, WaveStore};
 
@@ -105,6 +114,49 @@ impl LiveWavelet {
                     if !text.is_empty() {
                         out.push((key.to_string(), text));
                     }
+                }
+            }
+        }
+        out
+    }
+
+    /// Blips with author + timestamp from the conversation manifest — feeds
+    /// the @mention agent trigger (needs to know who wrote what, when).
+    pub fn blips_detailed(&self) -> Vec<BlipInfo> {
+        let doc = self.doc.lock().unwrap();
+        let txn = doc.transact();
+        let mut texts: HashMap<String, String> = HashMap::new();
+        if let Some(blips) = txn.get_map("blips") {
+            for (key, value) in blips.iter(&txn) {
+                if let Out::YXmlFragment(frag) = value {
+                    let mut text = String::new();
+                    strip_tags(&frag.get_string(&txn), &mut text);
+                    texts.insert(key.to_string(), text.trim().to_string());
+                }
+            }
+        }
+        let mut out = Vec::new();
+        if let Some(manifest) = txn.get_array("manifest") {
+            for i in 0..manifest.len(&txn) {
+                if let Some(Out::Any(Any::Map(map))) = manifest.get(&txn, i) {
+                    let sfield = |k: &str| match map.get(k) {
+                        Some(Any::String(s)) => s.to_string(),
+                        _ => String::new(),
+                    };
+                    let id = sfield("id");
+                    if id.is_empty() {
+                        continue;
+                    }
+                    let ts = match map.get("ts") {
+                        Some(Any::Number(n)) => *n as u64,
+                        _ => 0,
+                    };
+                    out.push(BlipInfo {
+                        text: texts.get(&id).cloned().unwrap_or_default(),
+                        author: sfield("author"),
+                        ts,
+                        id,
+                    });
                 }
             }
         }

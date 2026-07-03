@@ -23,9 +23,41 @@ pub struct SearchHit {
 }
 
 pub trait SearchIndex: Send + Sync + 'static {
-    fn upsert(&self, wave: &str, title: &str, body: &str) -> io::Result<()>;
+    fn upsert(&self, wave: &str, title: &str, body: &str, tags: &str) -> io::Result<()>;
     fn query(&self, q: &str, allowed: &HashSet<String>, limit: usize)
         -> io::Result<Vec<SearchHit>>;
+}
+
+/// Extract `#hashtag` tokens from text, returned space-joined without the
+/// `#`, deduplicated, lowercased. Feeds the search index's dedicated tag
+/// field so `#tag` chips resolve to a real query.
+pub fn extract_tags(text: &str) -> String {
+    let mut tags: Vec<String> = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // A tag starts with '#' at a word boundary.
+        let boundary = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+        if bytes[i] == b'#' && boundary {
+            let start = i + 1;
+            let mut j = start;
+            while j < bytes.len()
+                && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b'-')
+            {
+                j += 1;
+            }
+            if j > start {
+                let tag = text[start..j].to_lowercase();
+                if !tags.contains(&tag) {
+                    tags.push(tag);
+                }
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    tags.join(" ")
 }
 
 fn other(e: impl std::fmt::Display) -> io::Error {
@@ -38,6 +70,7 @@ pub struct TantivyIndex {
     wave: Field,
     title: Field,
     body: Field,
+    tags: Field,
 }
 
 impl TantivyIndex {
@@ -47,12 +80,27 @@ impl TantivyIndex {
         let wave = builder.add_text_field("wave", STRING | STORED);
         let title = builder.add_text_field("title", TEXT | STORED);
         let body = builder.add_text_field("body", TEXT | STORED);
+        let tags = builder.add_text_field("tags", TEXT | STORED);
         let schema = builder.build();
-        let index = Index::open_or_create(
-            tantivy::directory::MmapDirectory::open(dir).map_err(other)?,
-            schema,
-        )
-        .map_err(other)?;
+        let open = |schema: Schema| {
+            Index::open_or_create(
+                tantivy::directory::MmapDirectory::open(dir).map_err(other)?,
+                schema,
+            )
+            .map_err(other)
+        };
+        // The index is derived state. If a schema change (e.g. adding the
+        // tags field) leaves an incompatible index on disk, rebuild it from
+        // scratch rather than crashing — content re-indexes as waves change.
+        let index = match open(schema.clone()) {
+            Ok(index) => index,
+            Err(_) => {
+                tracing::warn!("search schema changed — rebuilding index");
+                let _ = std::fs::remove_dir_all(dir);
+                std::fs::create_dir_all(dir)?;
+                open(schema)?
+            }
+        };
         let writer = index.writer(15_000_000).map_err(other)?;
         Ok(Self {
             index,
@@ -60,12 +108,13 @@ impl TantivyIndex {
             wave,
             title,
             body,
+            tags,
         })
     }
 }
 
 impl SearchIndex for TantivyIndex {
-    fn upsert(&self, wave: &str, title: &str, body: &str) -> io::Result<()> {
+    fn upsert(&self, wave: &str, title: &str, body: &str, tags: &str) -> io::Result<()> {
         let mut writer = self.writer.lock().unwrap();
         writer.delete_term(Term::from_field_text(self.wave, wave));
         writer
@@ -73,6 +122,7 @@ impl SearchIndex for TantivyIndex {
                 self.wave => wave,
                 self.title => title,
                 self.body => body,
+                self.tags => tags,
             ))
             .map_err(other)?;
         writer.commit().map_err(other)?;
@@ -87,7 +137,16 @@ impl SearchIndex for TantivyIndex {
     ) -> io::Result<Vec<SearchHit>> {
         let reader = self.index.reader().map_err(other)?;
         let searcher = reader.searcher();
-        let parser = QueryParser::for_index(&self.index, vec![self.title, self.body]);
+        // A leading '#' (from a tag chip) targets the tags field; otherwise
+        // full-text across title/body/tags.
+        let (parser, q) = if let Some(tag) = q.strip_prefix('#') {
+            (QueryParser::for_index(&self.index, vec![self.tags]), tag)
+        } else {
+            (
+                QueryParser::for_index(&self.index, vec![self.title, self.body, self.tags]),
+                q,
+            )
+        };
         let query = match parser.parse_query(q) {
             Ok(query) => query,
             Err(_) => return Ok(Vec::new()), // malformed query is just no hits
@@ -141,9 +200,14 @@ mod tests {
     fn index_query_acl_and_update() {
         let dir = tempfile::tempdir().unwrap();
         let idx = TantivyIndex::open(dir.path()).unwrap();
-        idx.upsert("d/w1", "Plans", "we sail at dawn toward the harbor")
-            .unwrap();
-        idx.upsert("d/w2", "Secrets", "the harbor is a trap")
+        idx.upsert(
+            "d/w1",
+            "Plans",
+            "we sail at dawn toward the #harbor",
+            "harbor",
+        )
+        .unwrap();
+        idx.upsert("d/w2", "Secrets", "the harbor is a trap", "")
             .unwrap();
 
         let mine: HashSet<String> = ["d/w1".to_string()].into();
@@ -151,11 +215,26 @@ mod tests {
         assert_eq!(hits.len(), 1, "ACL filters out w2");
         assert_eq!(hits[0].wave, "d/w1");
 
+        // A '#tag' query targets the tags field: w1 is tagged, w2 is not.
+        let both: HashSet<String> = ["d/w1".to_string(), "d/w2".to_string()].into();
+        let tag_hits = idx.query("#harbor", &both, 10).unwrap();
+        assert_eq!(tag_hits.len(), 1, "only the tagged wave matches #harbor");
+        assert_eq!(tag_hits[0].wave, "d/w1");
+
         // Re-upsert replaces the old document.
-        idx.upsert("d/w1", "Plans", "no more sailing").unwrap();
+        idx.upsert("d/w1", "Plans", "no more sailing", "").unwrap();
         let hits = idx.query("harbor", &mine, 10).unwrap();
         assert!(hits.is_empty());
         let hits = idx.query("sailing", &mine, 10).unwrap();
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn extract_tags_pulls_hashtags() {
+        assert_eq!(
+            extract_tags("plan the #Harbor and #dawn-raid #harbor"),
+            "harbor dawn-raid"
+        );
+        assert_eq!(extract_tags("no tags here, a#b is not one"), "");
     }
 }

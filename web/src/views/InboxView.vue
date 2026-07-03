@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   DialogClose,
   DialogContent,
@@ -22,6 +22,7 @@ const { t, locale } = useI18n()
 const session = useSession()
 const waves = useWaves()
 const router = useRouter()
+const route = useRoute()
 
 const newTitle = ref('')
 const dialogOpen = ref(false)
@@ -31,7 +32,10 @@ const hits = ref<SearchHit[] | null>(null)
 const searching = ref(false)
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 
-onMounted(() => waves.refresh())
+onMounted(() => {
+  waves.refresh()
+  if (typeof route.query.q === 'string') query.value = route.query.q
+})
 
 watch(query, (q) => {
   if (searchTimer) clearTimeout(searchTimer)

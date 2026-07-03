@@ -12,6 +12,7 @@ import type { WaveletProvider } from '../lib/provider'
 import { useI18n } from 'vue-i18n'
 import { computed } from 'vue'
 import { isAgent, localPart, participantColor, type BlipEntry } from '../lib/wavemodel'
+import { TagsMentions } from '../lib/tiptap-decorations'
 
 const { t } = useI18n()
 
@@ -26,7 +27,7 @@ const props = defineProps<{
 
 const agent = computed(() => isAgent(props.entry.author))
 
-const emit = defineEmits<{ reply: [parent: string] }>()
+const emit = defineEmits<{ reply: [parent: string]; tag: [tag: string] }>()
 
 const editor = new Editor({
   extensions: [
@@ -37,8 +38,18 @@ const editor = new Editor({
       provider: { awareness: props.provider.awareness },
       user: { name: localPart(props.me), color: participantColor(props.me) },
     }),
+    TagsMentions,
   ],
 })
+
+// Clicking a #tag chip searches for it (tags render as decoration spans).
+function onEditorClick(event: MouseEvent) {
+  const el = (event.target as HTMLElement).closest('.pw-tag')
+  if (el) {
+    event.preventDefault()
+    emit('tag', (el.getAttribute('data-token') || '').replace(/^#/, ''))
+  }
+}
 
 onBeforeUnmount(() => editor.destroy())
 
@@ -63,7 +74,7 @@ function timeOf(ts: number): string {
         <span v-if="agent" class="tag tag-agent">assistant</span>
         <time class="caption">{{ timeOf(entry.ts) }}</time>
       </header>
-      <EditorContent :editor="editor" class="blip-editor" />
+      <EditorContent :editor="editor" class="blip-editor" @click="onEditorClick" />
       <div v-if="translation" class="translation">
         <span class="tag tag-dusk">{{ t('translated') }}</span>
         <p>{{ translation }}</p>

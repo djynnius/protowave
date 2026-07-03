@@ -38,6 +38,13 @@ budgets (NFR-Cx), architecture decisions (ADR-1..5), and the phase roadmap
   POST /api/waves/ask; RAG over the asker's accessible waves + shared files
   with provenance; signed federated inference `/federation/v0/infer`
   (mixture-of-peers), model advertised in .well-known. FI-x not FR-x.
+  Also: #tag/@mention support — client decoration plugin
+  (web/src/lib/tiptap-decorations.ts, no PM node types so the CRDT stays
+  plain); tags extracted from title+body into a tantivy `tags` field,
+  `#tag` search targets it; @assistant in a new blip triggers the agent via
+  agent::spawn_mention_worker (debounced, deduped, recency-guarded,
+  rate-limited, skips agent-authored blips). Search index self-heals on
+  schema change (rebuilds instead of crashing).
   Constraints: R11 verification unsolved (answers advisory).
   Provider selection: PROTOWAVE_OLLAMA + PROTOWAVE_OLLAMA_MODEL (self-hosted,
   takes precedence) else Gemini (PROTOMOLECULE, PROTOWAVE_INFER_MODEL).

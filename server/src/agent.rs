@@ -257,18 +257,18 @@ pub struct AskRequest {
     pub prompt: String,
 }
 
-/// Assemble grounding context with provenance (FI-5: only the asker's own
-/// accessible content is ever retrieved).
+/// Assemble grounding context with provenance. Retrieval is scoped to the
+/// asker's accessible waves (FI-5); when there is no asker (the mention
+/// worker) it is skipped rather than widened.
 async fn build_context(
     state: &Arc<AppState>,
     wave: &str,
     live_text: &[(String, String)],
-    me: &protowave_core::ParticipantId,
+    asker: Option<&protowave_core::ParticipantId>,
     prompt: &str,
 ) -> String {
     let mut ctx = String::new();
 
-    // Recent conversation.
     ctx.push_str("Recent messages on this wave:\n");
     for (_, text) in live_text.iter().rev().take(RECENT_BLIPS).rev() {
         ctx.push_str("- ");
@@ -276,25 +276,25 @@ async fn build_context(
         ctx.push('\n');
     }
 
-    // Retrieval across the asker's waves (cited by wave title).
-    let allowed: std::collections::HashSet<String> = state
-        .store
-        .list_waves_for(me)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|w| w.wave)
-        .collect();
-    if let Ok(hits) = state.search.query(prompt, &allowed, RAG_HITS) {
-        if !hits.is_empty() {
-            ctx.push_str("\nRelevant waves you can access:\n");
-            for h in hits {
-                ctx.push_str(&format!("- [{}] {}\n", h.title, strip_html(&h.snippet)));
+    if let Some(me) = asker {
+        let allowed: std::collections::HashSet<String> = state
+            .store
+            .list_waves_for(me)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|w| w.wave)
+            .collect();
+        if let Ok(hits) = state.search.query(prompt, &allowed, RAG_HITS) {
+            if !hits.is_empty() {
+                ctx.push_str("\nRelevant waves you can access:\n");
+                for h in hits {
+                    ctx.push_str(&format!("- [{}] {}\n", h.title, strip_html(&h.snippet)));
+                }
             }
         }
     }
 
-    // Shared files on this wave (cited by name).
     if let Ok(shares) = state.store.list_shares(wave).await {
         if !shares.is_empty() {
             ctx.push_str("\nShared files on this wave:\n");
@@ -318,6 +318,59 @@ fn strip_html(s: &str) -> String {
         }
     }
     out
+}
+
+/// Core agent turn: gather context, infer, and post the answer as a blip.
+/// Returns `(answer, model)`. Shared by the explicit ask API and the
+/// @mention worker; does no ACL/rate-limit checks (callers do).
+pub async fn answer_wave(
+    state: &Arc<AppState>,
+    wave: &str,
+    prompt: &str,
+    asker: Option<&protowave_core::ParticipantId>,
+) -> Result<(String, String), ApiError> {
+    let provider = state.inference.get().ok_or_else(|| {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no model configured".into(),
+        )
+    })?;
+    let root: WaveletName = format!("{wave}/conv+root")
+        .parse()
+        .map_err(|_| ApiError::bad_request("bad wave id"))?;
+    let live = state
+        .engine
+        .open_wavelet(&root)
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:?}")))?;
+    let live_text = live.extract_blips();
+    let context = build_context(state, wave, &live_text, asker, prompt).await;
+    let answer = provider
+        .infer(prompt, &context)
+        .await
+        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("inference failed: {e}")))?;
+
+    let agent = format!("{AGENT_LOCAL}@{}", state.domain);
+    let update = {
+        let scratch = Doc::new();
+        let (_sv, diff) = live
+            .sync_state(&[])
+            .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:?}")))?;
+        if !diff.is_empty() {
+            use yrs::updates::decoder::Decode;
+            scratch
+                .transact_mut()
+                .apply_update(yrs::Update::decode_v1(&diff).unwrap());
+        }
+        agent_blip_update(&scratch, &agent, &answer)
+    };
+    state
+        .engine
+        .apply_update(&live, update.clone(), 0)
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:?}")))?;
+    crate::federation::spawn_push_update(state.clone(), root, update);
+    Ok((answer, provider.model()))
 }
 
 pub async fn ask(
@@ -344,58 +397,71 @@ pub async fn ask(
     if !meta.participants.contains(&me.to_string()) {
         return Err(ApiError(StatusCode::FORBIDDEN, "not a participant".into()));
     }
-    let provider = state.inference.get().ok_or_else(|| {
-        ApiError(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "no model configured".into(),
-        )
-    })?;
-
-    let root: WaveletName = format!("{}/conv+root", req.wave)
-        .parse()
-        .map_err(|_| ApiError::bad_request("bad wave id"))?;
-    let live = state
-        .engine
-        .open_wavelet(&root)
-        .await
-        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:?}")))?;
-    let live_text = live.extract_blips();
-    let context = build_context(&state, &req.wave, &live_text, &me, prompt).await;
-
-    let answer = provider
-        .infer(prompt, &context)
-        .await
-        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("inference failed: {e}")))?;
-
-    // Write the agent's reply as a blip through the engine (persists, fans
-    // out to subscribers, federates).
-    let agent = format!("{AGENT_LOCAL}@{}", state.domain);
-    let update = {
-        let scratch = Doc::new();
-        // Materialize current state so the new blip stacks onto it.
-        let (_sv, diff) = live
-            .sync_state(&[])
-            .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:?}")))?;
-        if !diff.is_empty() {
-            use yrs::updates::decoder::Decode;
-            scratch
-                .transact_mut()
-                .apply_update(yrs::Update::decode_v1(&diff).unwrap());
-        }
-        agent_blip_update(&scratch, &agent, &answer)
-    };
-    state
-        .engine
-        .apply_update(&live, update.clone(), 0)
-        .await
-        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:?}")))?;
-    // Fan the agent's blip out to federated peers, like any local edit.
-    crate::federation::spawn_push_update(state.clone(), root, update);
-    tracing::info!(wave = %req.wave, by = %me, model = %provider.model(), "agent answered");
-
+    let (answer, model) = answer_wave(&state, &req.wave, prompt, Some(&me)).await?;
+    tracing::info!(wave = %req.wave, by = %me, %model, "agent answered (ask)");
     Ok(Json(serde_json::json!({
         "answer": answer,
-        "model": provider.model(),
-        "agent": agent,
+        "model": model,
+        "agent": format!("{AGENT_LOCAL}@{}", state.domain),
     })))
+}
+
+/// Background worker: when a *new* blip mentions `@assistant`, the agent
+/// answers it inline (the Wave-robots behaviour). Heavily guarded against
+/// loops and cost: agent-authored blips are skipped, each blip is answered
+/// at most once, only recent blips qualify (so a restart doesn't re-answer
+/// history), edits are debounced, and a per-wave rate limit applies.
+pub fn spawn_mention_worker(state: Arc<AppState>) {
+    let agent = format!("{AGENT_LOCAL}@{}", state.domain);
+    let mention = format!("@{AGENT_LOCAL}");
+    let mut rx = state.engine.change_stream();
+    tokio::spawn(async move {
+        let mut handled: std::collections::HashSet<String> = std::collections::HashSet::new();
+        while let Some(name) = rx.recv().await {
+            if !state.inference.available() {
+                continue;
+            }
+            // Let the author finish typing the mention before we read it.
+            tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+            let live = match state.engine.open_wavelet(&name).await {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            let wave = name.wave_id.to_string();
+            for blip in live.blips_detailed() {
+                if handled.contains(&blip.id) {
+                    continue;
+                }
+                // Skip the agent's own blips (no loops).
+                if blip.author == agent {
+                    handled.insert(blip.id);
+                    continue;
+                }
+                let recent = now_ms().saturating_sub(blip.ts) < 10 * 60 * 1000;
+                if !blip.text.contains(&mention) {
+                    continue;
+                }
+                // Mark handled up-front so a mid-answer edit can't double-fire.
+                handled.insert(blip.id.clone());
+                if !recent {
+                    continue; // old mention seen after a restart — ignore
+                }
+                // Per-wave budget guard against @assistant spam.
+                if state
+                    .limits
+                    .check(&wave, "mention", 20, std::time::Duration::from_secs(3600))
+                    .is_err()
+                {
+                    continue;
+                }
+                let asker = blip.author.parse::<protowave_core::ParticipantId>().ok();
+                match answer_wave(&state, &wave, &blip.text, asker.as_ref()).await {
+                    Ok((_, model)) => {
+                        tracing::info!(%wave, %model, "agent answered (@mention)")
+                    }
+                    Err(e) => tracing::warn!(err = %e.1, %wave, "mention answer failed"),
+                }
+            }
+        }
+    });
 }

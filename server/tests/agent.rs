@@ -232,6 +232,60 @@ async fn agent_answers_as_a_blip_with_context() {
 }
 
 #[tokio::test]
+async fn mentioning_the_assistant_triggers_a_reply_once() {
+    let (server, _url) = spawn("localhost", HashMap::new(), true).await;
+    let ada = server.register("ada").await;
+    let (_s, _c, wave) = server
+        .json(
+            "/api/waves",
+            Some(&ada),
+            serde_json::json!({ "title": "harbor" }),
+        )
+        .await;
+    let root = wave["rootWavelet"].as_str().unwrap().to_string();
+
+    // ada writes a blip mentioning @assistant, through the engine.
+    let name: WaveletName = root.parse().unwrap();
+    let live = server.state.engine.open_wavelet(&name).await.unwrap();
+    let update = protowave_server::agent::agent_blip_update(
+        &Doc::new(),
+        "ada@localhost",
+        "hey @assistant, what about the harbor?",
+    );
+    server
+        .state
+        .engine
+        .apply_update(&live, update, 1)
+        .await
+        .unwrap();
+
+    // The mention worker (2.5s debounce) posts one agent reply.
+    let mut agent_replies = 0;
+    for _ in 0..80 {
+        let doc = materialize(&server, &root).await;
+        agent_replies = blip_authors(&doc)
+            .iter()
+            .filter(|a| *a == "assistant@localhost")
+            .count();
+        if agent_replies >= 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(agent_replies, 1, "exactly one agent reply expected");
+
+    // Give the worker more time — it must NOT answer the same mention again
+    // (and must not answer its own reply, which would loop).
+    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+    let doc = materialize(&server, &root).await;
+    let again = blip_authors(&doc)
+        .iter()
+        .filter(|a| *a == "assistant@localhost")
+        .count();
+    assert_eq!(again, 1, "no duplicate / no self-triggered loop");
+}
+
+#[tokio::test]
 async fn ask_requires_participant_and_model() {
     // No model configured → 503.
     let (server, _url) = spawn("localhost", HashMap::new(), false).await;

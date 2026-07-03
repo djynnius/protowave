@@ -99,6 +99,7 @@ impl AppState {
         }
         spawn_search_indexer(state.clone());
         translate::spawn_translation_worker(state.clone());
+        agent::spawn_mention_worker(state.clone());
         Ok(state)
     }
 
@@ -152,7 +153,13 @@ fn spawn_search_indexer(state: Arc<AppState>) {
                 };
                 if let Ok(live) = state.engine.open_wavelet(&name).await {
                     let body = live.extract_text();
-                    if let Err(e) = state.search.upsert(&wave_key, &title, &body) {
+                    // Tags come from both the title and blip content.
+                    let tags = format!(
+                        "{} {}",
+                        search::extract_tags(&title),
+                        search::extract_tags(&body)
+                    );
+                    if let Err(e) = state.search.upsert(&wave_key, &title, &body, tags.trim()) {
                         tracing::warn!(%e, wave = %wave_key, "search upsert failed");
                     }
                 }

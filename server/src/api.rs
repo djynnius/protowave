@@ -90,6 +90,14 @@ pub async fn create_wave(
         translation_enabled: false,
     };
     state.store.put_wave(&meta).await?;
+    // Index the title + its tags immediately so a fresh wave is searchable
+    // before anyone has typed a blip.
+    let _ = state.search.upsert(
+        &meta.wave,
+        &meta.title,
+        "",
+        crate::search::extract_tags(&meta.title).trim(),
+    );
     tracing::info!(wave = %meta.wave, by = %me, "wave created");
     Ok((StatusCode::CREATED, Json(WaveDigest::new(meta, now))))
 }
