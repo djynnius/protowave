@@ -2,6 +2,14 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import {
+  DialogClose,
+  DialogContent,
+  DialogOverlay,
+  DialogPortal,
+  DialogRoot,
+  DialogTitle,
+} from 'reka-ui'
 import type { Node as PMNode } from '@tiptap/pm/model'
 import { socket, WaveletProvider } from '../lib/provider'
 import { useSession } from '../stores/session'
@@ -54,6 +62,25 @@ const sharingFolder = ref(false)
 const translationLang = ref(localStorage.getItem('pw-lang') ?? '')
 const replyTarget = ref<{ id: string; author: string; snippet: string } | null>(null)
 const threadEl = ref<HTMLElement | null>(null)
+const addOpen = ref(false)
+const addName = ref('')
+const addError = ref('')
+
+async function addParticipant() {
+  addError.value = ''
+  const name = addName.value.trim()
+  if (!name) return
+  try {
+    // Bare names are treated as local to this server; full user@domain
+    // addresses (including remote ones) are accepted as-is.
+    const address = name.includes('@') ? name : `${name}@${me.value.split('@')[1]}`
+    await waves.addParticipant(waveId.value, address)
+    addOpen.value = false
+    addName.value = ''
+  } catch (e) {
+    addError.value = e instanceof Error ? e.message : t('couldNotAdd')
+  }
+}
 
 function blipText(id: string): string {
   const frag = blips(provider.doc).get(id)
@@ -336,7 +363,32 @@ async function shareFolder(event: Event) {
       @set-lang="setLang"
       @enable-translation="enableTranslation"
       @tag="onTag"
+      @add-person="addOpen = true"
     />
+
+    <DialogRoot v-model:open="addOpen">
+      <DialogPortal>
+        <DialogOverlay class="dialog-overlay" />
+        <DialogContent class="dialog-content">
+          <DialogTitle class="dialog-title">{{ t('addToWave') }}</DialogTitle>
+          <form @submit.prevent="addParticipant">
+            <label class="field">
+              <span class="field-label">{{ t('nameOrAddress') }}</span>
+              <input v-model="addName" class="text-input" placeholder="ada  ·  bob@other.server" autofocus />
+            </label>
+            <p v-if="addError" class="error-note">{{ addError }}</p>
+            <div class="dialog-actions">
+              <DialogClose as-child>
+                <button type="button" class="btn">{{ t('cancel') }}</button>
+              </DialogClose>
+              <button type="submit" class="btn btn-tide" :disabled="!addName.trim()">
+                {{ t('add') }}
+              </button>
+            </div>
+          </form>
+        </DialogContent>
+      </DialogPortal>
+    </DialogRoot>
   </div>
 </template>
 
@@ -425,6 +477,13 @@ async function shareFolder(event: Event) {
   margin: 0 0 0.4rem 0.6rem;
   color: var(--tide-deep);
   font-style: italic;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
 }
 
 @media (max-width: 60rem) {

@@ -20,13 +20,17 @@ const emit = defineEmits<{
   setLang: [code: string]
   enableTranslation: []
   tag: [tag: string]
+  addPerson: []
 }>()
 </script>
 
 <template>
   <aside class="panel">
     <section>
-      <p class="section-label caption">{{ t('participants') }}</p>
+      <div class="section-head">
+        <p class="section-label caption">{{ t('participants') }}</p>
+        <button class="add-btn" :title="t('addCrew')" @click="emit('addPerson')">+</button>
+      </div>
       <ul class="people">
         <li v-for="p in participants" :key="p" class="person">
           <span
@@ -86,6 +90,33 @@ const emit = defineEmits<{
 
 .section-label {
   margin-bottom: 0.7rem;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.add-btn {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  border: 1px solid var(--mist);
+  background: #fff;
+  color: var(--deep);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  margin-bottom: 0.7rem;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.add-btn:hover {
+  background: var(--sky-t);
+  border-color: var(--deep);
 }
 
 .people {
