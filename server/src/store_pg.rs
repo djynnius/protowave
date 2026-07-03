@@ -13,7 +13,9 @@ use tokio_postgres::NoTls;
 
 use protowave_core::{ParticipantId, WaveletName};
 
-use crate::store::{Account, AttachmentMeta, ShareMeta, WaveMeta, WaveStore, WaveletRecord};
+use crate::store::{
+    Account, AttachmentMeta, ShareMeta, UserModel, WaveMeta, WaveStore, WaveletRecord,
+};
 
 fn db_err(e: impl std::fmt::Display) -> io::Error {
     io::Error::new(io::ErrorKind::Other, format!("postgres: {e}"))
@@ -87,7 +89,31 @@ CREATE TABLE IF NOT EXISTS shares (
     created_ms BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS shares_wave ON shares (wave);
+CREATE TABLE IF NOT EXISTS models (
+    id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    label TEXT NOT NULL,
+    base TEXT NOT NULL,
+    model TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL,
+    created_ms BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS models_owner ON models (owner);
 ";
+
+fn row_to_model(row: &tokio_postgres::Row) -> UserModel {
+    UserModel {
+        id: row.get("id"),
+        owner: row.get("owner"),
+        label: row.get("label"),
+        base: row.get("base"),
+        model: row.get("model"),
+        scope: row.get("scope"),
+        enabled: row.get("enabled"),
+        created_ms: row.get::<_, i64>("created_ms") as u64,
+    }
+}
 
 fn row_to_share(row: &tokio_postgres::Row) -> ShareMeta {
     ShareMeta {
@@ -343,6 +369,69 @@ impl WaveStore for PgStore {
             .await
             .map_err(db_err)?;
         Ok(row.map(|r| r.get(0)))
+    }
+
+    async fn put_model(&self, model: &UserModel) -> io::Result<()> {
+        let client = self.client().await?;
+        client
+            .execute(
+                "INSERT INTO models (id, owner, label, base, model, scope, enabled, created_ms)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 ON CONFLICT (id) DO UPDATE SET
+                   label = $3, base = $4, model = $5, scope = $6, enabled = $7",
+                &[
+                    &model.id,
+                    &model.owner,
+                    &model.label,
+                    &model.base,
+                    &model.model,
+                    &model.scope,
+                    &model.enabled,
+                    &(model.created_ms as i64),
+                ],
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn get_model(&self, id: &str) -> io::Result<Option<UserModel>> {
+        let client = self.client().await?;
+        let row = client
+            .query_opt("SELECT * FROM models WHERE id = $1", &[&id])
+            .await
+            .map_err(db_err)?;
+        Ok(row.as_ref().map(row_to_model))
+    }
+
+    async fn list_models_for(&self, owner: &str) -> io::Result<Vec<UserModel>> {
+        let client = self.client().await?;
+        let rows = client
+            .query(
+                "SELECT * FROM models WHERE owner = $1 ORDER BY created_ms ASC",
+                &[&owner],
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(rows.iter().map(row_to_model).collect())
+    }
+
+    async fn list_models(&self) -> io::Result<Vec<UserModel>> {
+        let client = self.client().await?;
+        let rows = client
+            .query("SELECT * FROM models ORDER BY created_ms ASC", &[])
+            .await
+            .map_err(db_err)?;
+        Ok(rows.iter().map(row_to_model).collect())
+    }
+
+    async fn delete_model(&self, id: &str) -> io::Result<()> {
+        let client = self.client().await?;
+        client
+            .execute("DELETE FROM models WHERE id = $1", &[&id])
+            .await
+            .map_err(db_err)?;
+        Ok(())
     }
 
     async fn put_session(&self, session_id: &str, participant: &ParticipantId) -> io::Result<()> {

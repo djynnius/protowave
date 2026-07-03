@@ -28,6 +28,18 @@ export interface SearchHit {
   snippet: string
 }
 
+export interface PoolModel {
+  id: string
+  owner: string
+  ownerName: string
+  label: string
+  base: string
+  model: string
+  scope: 'private' | 'wave' | 'federation'
+  enabled: boolean
+  mine: boolean
+}
+
 export interface ShareMeta {
   manifest_hash: string
   wave: string
@@ -127,6 +139,22 @@ export const api = {
     request<{ ok: boolean; activeModel: string }>('/api/settings', {
       method: 'PUT',
       body: JSON.stringify({ provider, base, model }),
+    }),
+  listModels: () => request<{ mine: PoolModel[]; pool: PoolModel[] }>('/api/models'),
+  putModel: (m: {
+    id?: string
+    label: string
+    base: string
+    model: string
+    scope: string
+    enabled?: boolean
+  }) => request<PoolModel>('/api/models', { method: 'POST', body: JSON.stringify(m) }),
+  deleteModel: (id: string) =>
+    request<{ ok: boolean }>(`/api/models/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  testModel: (base: string, model: string) =>
+    request<{ ok: boolean; model?: string; error?: string }>('/api/models/test', {
+      method: 'POST',
+      body: JSON.stringify({ base, model }),
     }),
   ask: (wave: string, prompt: string) =>
     request<{ answer: string; model: string; agent: string }>('/api/waves/ask', {

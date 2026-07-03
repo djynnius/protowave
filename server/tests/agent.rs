@@ -427,8 +427,9 @@ async fn federated_inference_routes_to_a_peer_model() {
     }
 
     // B has no local model, so it routes inference to A over federation.
+    // Empty model id targets A's node default (mock-1).
     let (text, model) =
-        protowave_server::federation::peer_infer(&state_b, "a.local", &wave_id, "ping", "ctx")
+        protowave_server::federation::peer_infer(&state_b, "a.local", &wave_id, "ping", "ctx", "")
             .await
             .expect("federated inference should succeed");
     assert_eq!(model, "mock-1");

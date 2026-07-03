@@ -91,6 +91,27 @@ pub struct ShareMeta {
     pub created_ms: u64,
 }
 
+/// A user-contributed model in the inference pool (PRD §12.1, FI-1). Each
+/// entry is an Ollama-compatible endpoint its `owner` hosts; no secrets are
+/// stored (that's why the pool is Ollama-only for now). `scope` governs who
+/// may route to it:
+///   - `private`     — only the owner's own asks
+///   - `wave`        — anyone on a wave the owner participates in
+///   - `federation`  — also offered to peer nodes (advertised in .well-known)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserModel {
+    pub id: String,
+    pub owner: String,
+    pub label: String,
+    /// Ollama server base URL, e.g. `http://ada.box:11434`.
+    pub base: String,
+    /// Model tag, e.g. `gemma3:270m`.
+    pub model: String,
+    pub scope: String,
+    pub enabled: bool,
+    pub created_ms: u64,
+}
+
 /// A wavelet's persisted state: latest snapshot (if any) plus the update
 /// log tail not yet covered by it. Open cost is O(snapshot) + O(tail)
 /// (NFR-C3); the log itself is never truncated (NFR-9).
@@ -132,6 +153,16 @@ pub trait WaveStore: Send + Sync + 'static {
     /// before ownership existed), adopt the earliest-registered account.
     /// Returns the owner, if any account exists. Idempotent.
     async fn ensure_owner(&self) -> io::Result<Option<String>>;
+
+    // Inference pool models (PRD §12.1, FI-1).
+    /// Insert or replace a model (keyed by `id`).
+    async fn put_model(&self, model: &UserModel) -> io::Result<()>;
+    async fn get_model(&self, id: &str) -> io::Result<Option<UserModel>>;
+    /// One participant's own models.
+    async fn list_models_for(&self, owner: &str) -> io::Result<Vec<UserModel>>;
+    /// Every model on this server (routing + pool listing; server-side only).
+    async fn list_models(&self) -> io::Result<Vec<UserModel>>;
+    async fn delete_model(&self, id: &str) -> io::Result<()>;
 
     // Sessions.
     async fn put_session(&self, session_id: &str, participant: &ParticipantId) -> io::Result<()>;
@@ -189,6 +220,8 @@ struct Tables {
     shares: HashMap<String, ShareMeta>,
     #[serde(default)]
     settings: HashMap<String, String>,
+    #[serde(default)]
+    models: HashMap<String, UserModel>,
 }
 
 pub struct FileStore {
@@ -388,6 +421,42 @@ impl WaveStore for FileStore {
             self.flush_tables(&tables)?;
         }
         Ok(earliest)
+    }
+
+    async fn put_model(&self, model: &UserModel) -> io::Result<()> {
+        let mut tables = self.tables.lock().unwrap();
+        tables.models.insert(model.id.clone(), model.clone());
+        self.flush_tables(&tables)
+    }
+
+    async fn get_model(&self, id: &str) -> io::Result<Option<UserModel>> {
+        let tables = self.tables.lock().unwrap();
+        Ok(tables.models.get(id).cloned())
+    }
+
+    async fn list_models_for(&self, owner: &str) -> io::Result<Vec<UserModel>> {
+        let tables = self.tables.lock().unwrap();
+        let mut out: Vec<UserModel> = tables
+            .models
+            .values()
+            .filter(|m| m.owner == owner)
+            .cloned()
+            .collect();
+        out.sort_by_key(|m| m.created_ms);
+        Ok(out)
+    }
+
+    async fn list_models(&self) -> io::Result<Vec<UserModel>> {
+        let tables = self.tables.lock().unwrap();
+        let mut out: Vec<UserModel> = tables.models.values().cloned().collect();
+        out.sort_by_key(|m| m.created_ms);
+        Ok(out)
+    }
+
+    async fn delete_model(&self, id: &str) -> io::Result<()> {
+        let mut tables = self.tables.lock().unwrap();
+        tables.models.remove(id);
+        self.flush_tables(&tables)
     }
 
     async fn put_setting(&self, key: &str, value: &str) -> io::Result<()> {
@@ -646,6 +715,88 @@ mod tests {
                 .unwrap()
                 .len(),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_models_crud() {
+        let (_g, store) = tmp_store();
+        let m = UserModel {
+            id: "m+1".into(),
+            owner: "ada@example.org".into(),
+            label: "Ada's Gemma".into(),
+            base: "http://ada.box:11434".into(),
+            model: "gemma3:270m".into(),
+            scope: "wave".into(),
+            enabled: true,
+            created_ms: 1,
+        };
+        store.put_model(&m).await.unwrap();
+        assert_eq!(
+            store.get_model("m+1").await.unwrap().unwrap().model,
+            "gemma3:270m"
+        );
+        assert_eq!(
+            store
+                .list_models_for("ada@example.org")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            store
+                .list_models_for("bob@example.org")
+                .await
+                .unwrap()
+                .len(),
+            0
+        );
+
+        // Update in place keeps the same id.
+        store
+            .put_model(&UserModel {
+                scope: "federation".into(),
+                ..m.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(store.list_models().await.unwrap().len(), 1);
+        assert_eq!(
+            store.get_model("m+1").await.unwrap().unwrap().scope,
+            "federation"
+        );
+
+        store.delete_model("m+1").await.unwrap();
+        assert!(store.get_model("m+1").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn owner_backfill_adopts_earliest_account() {
+        let (_g, store) = tmp_store();
+        // No accounts yet → no owner.
+        assert_eq!(store.ensure_owner().await.unwrap(), None);
+        for (name, ts) in [("bob@example.org", 5), ("ada@example.org", 2)] {
+            store
+                .create_account(&Account {
+                    participant: name.into(),
+                    password_hash: "phc".into(),
+                    created_ms: ts,
+                    first_name: String::new(),
+                    last_name: String::new(),
+                })
+                .await
+                .unwrap();
+        }
+        // create_account already set the owner to the first inserted (bob);
+        // clearing it lets ensure_owner pick the earliest by created_ms (ada).
+        {
+            let mut tables = store.tables.lock().unwrap();
+            tables.settings.remove("owner");
+        }
+        assert_eq!(
+            store.ensure_owner().await.unwrap().as_deref(),
+            Some("ada@example.org")
         );
     }
 }

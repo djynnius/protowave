@@ -213,6 +213,88 @@ impl InferenceHub {
 }
 
 // ---------------------------------------------------------------------------
+// Per-user model pool + auto-router (PRD §12.1, FI-1)
+// ---------------------------------------------------------------------------
+
+/// Caches a constructed provider per pool model so routing doesn't rebuild
+/// an HTTP client on every answer. Keyed by `base|model`; pool models are
+/// Ollama endpoints (no secrets), so construction is cheap and stateless.
+#[derive(Default)]
+pub struct ModelPool {
+    cache: RwLock<HashMap<String, Arc<dyn InferenceProvider>>>,
+}
+
+impl ModelPool {
+    pub fn provider_for(&self, base: &str, model: &str) -> Arc<dyn InferenceProvider> {
+        let key = format!("{base}|{model}");
+        if let Some(p) = self.cache.read().unwrap().get(&key) {
+            return p.clone();
+        }
+        let provider: Arc<dyn InferenceProvider> =
+            Arc::new(OllamaInference::new(base.to_string(), model.to_string()));
+        self.cache.write().unwrap().insert(key, provider.clone());
+        provider
+    }
+}
+
+/// A chosen model plus a human-readable provenance string for the answer.
+pub struct Route {
+    pub provider: Arc<dyn InferenceProvider>,
+    pub provenance: String,
+}
+
+fn route_from(state: &Arc<AppState>, m: &crate::store::UserModel) -> Route {
+    let owner_local = m.owner.split('@').next().unwrap_or(&m.owner);
+    Route {
+        provider: state.model_pool.provider_for(&m.base, &m.model),
+        provenance: format!("{} · hosted by {owner_local}", m.model),
+    }
+}
+
+/// Auto-route an ask to a model (FI-1). Precedence: the asker's own enabled
+/// model (any scope) → an enabled model shared to the wave by a participant
+/// (scope `wave`/`federation`) → this node's default provider. Returns
+/// `None` only when nothing at all is configured.
+pub async fn select_route(
+    state: &Arc<AppState>,
+    meta: &crate::store::WaveMeta,
+    asker: Option<&protowave_core::ParticipantId>,
+) -> Option<Route> {
+    let enabled: Vec<crate::store::UserModel> = state
+        .store
+        .list_models()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| m.enabled)
+        .collect();
+
+    // 1. The asker's own model, whatever its scope (it's theirs to use).
+    if let Some(me) = asker {
+        let me = me.to_string();
+        if let Some(m) = enabled.iter().find(|m| m.owner == me) {
+            return Some(route_from(state, m));
+        }
+    }
+    // 2. A model a wave participant has shared to the wave or the federation.
+    let participants: std::collections::HashSet<&String> = meta.participants.iter().collect();
+    if let Some(m) = enabled
+        .iter()
+        .find(|m| (m.scope == "wave" || m.scope == "federation") && participants.contains(&m.owner))
+    {
+        return Some(route_from(state, m));
+    }
+    // 3. This node's default provider (owner-configured / env).
+    state.inference.get().map(|provider| {
+        let provenance = provider.model();
+        Route {
+            provider,
+            provenance,
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Server-authored blips (wire-compatible with web/src/lib/wavemodel.ts).
 // ---------------------------------------------------------------------------
 
@@ -339,7 +421,14 @@ pub async fn answer_wave(
     asker: Option<&protowave_core::ParticipantId>,
     reply_to: Option<&str>,
 ) -> Result<(String, String), ApiError> {
-    let provider = state.inference.get().ok_or_else(|| {
+    // Route to a model from the pool (asker's own → a wave member's shared
+    // model → node default). Needs the wave's participant list.
+    let meta = state
+        .store
+        .get_wave(wave)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such wave".into()))?;
+    let route = select_route(state, &meta, asker).await.ok_or_else(|| {
         ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
             "no model configured".into(),
@@ -355,7 +444,8 @@ pub async fn answer_wave(
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:?}")))?;
     let live_text = live.extract_blips();
     let context = build_context(state, wave, &live_text, asker, prompt).await;
-    let answer = provider
+    let answer = route
+        .provider
         .infer(prompt, &context)
         .await
         .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("inference failed: {e}")))?;
@@ -380,7 +470,7 @@ pub async fn answer_wave(
         .await
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:?}")))?;
     crate::federation::spawn_push_update(state.clone(), root, update);
-    Ok((answer, provider.model()))
+    Ok((answer, route.provenance))
 }
 
 pub async fn ask(
@@ -428,8 +518,18 @@ pub fn spawn_mention_worker(state: Arc<AppState>) {
     tokio::spawn(async move {
         let mut handled: std::collections::HashSet<String> = std::collections::HashSet::new();
         while let Some(name) = rx.recv().await {
+            // Proceed if the node has a default model or the pool holds any
+            // enabled one (only pay the pool lookup when there's no default).
             if !state.inference.available() {
-                continue;
+                let has_pool = state
+                    .store
+                    .list_models()
+                    .await
+                    .map(|v| v.iter().any(|m| m.enabled))
+                    .unwrap_or(false);
+                if !has_pool {
+                    continue;
+                }
             }
             // Let the author finish typing the mention before we read it.
             tokio::time::sleep(std::time::Duration::from_millis(2500)).await;

@@ -10,6 +10,7 @@ pub mod cas;
 pub mod engine;
 pub mod federation;
 pub mod limits;
+pub mod models;
 pub mod search;
 pub mod settings;
 pub mod shares;
@@ -41,6 +42,8 @@ pub struct AppState {
     pub federation: Federation,
     pub translation: translate::TranslationHub,
     pub inference: agent::InferenceHub,
+    /// Per-user contributed models (the inference pool, FI-1).
+    pub model_pool: agent::ModelPool,
     pub limits: limits::RateLimiter,
     /// This server's federation domain (PRD §8.2).
     pub domain: String,
@@ -68,6 +71,7 @@ impl AppState {
             federation: Federation::new(fed_config, data_dir)?,
             translation: translate::TranslationHub::new(call_cap),
             inference: agent::InferenceHub::default(),
+            model_pool: agent::ModelPool::default(),
             limits: limits::RateLimiter::default(),
             domain: domain.into(),
         });
@@ -202,6 +206,15 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route("/api/waves/ask", post(agent::ask))
         .route("/api/profile", post(api::set_profile))
         .route("/api/users/:participant", get(api::user_profile))
+        .route(
+            "/api/models",
+            get(models::list_models).post(models::put_model),
+        )
+        .route("/api/models/test", post(models::test_model))
+        .route(
+            "/api/models/:id",
+            axum::routing::delete(models::delete_model),
+        )
         .route(
             "/api/settings",
             get(settings::get_settings).put(settings::put_settings),

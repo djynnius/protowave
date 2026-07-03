@@ -396,14 +396,35 @@ fn ack() -> Vec<u8> {
 }
 
 pub async fn well_known(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    // Capability manifests (FI-1): every federation-scoped pool model, so a
+    // peer's router can target one by id. Only the id/model/owner are exposed
+    // — never the base URL (that endpoint is the host's private business).
+    let models: Vec<serde_json::Value> = state
+        .store
+        .list_models()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| m.enabled && m.scope == "federation")
+        .map(|m| {
+            let owner_local = m.owner.split('@').next().unwrap_or(&m.owner).to_string();
+            serde_json::json!({
+                "id": m.id,
+                "label": m.label,
+                "model": m.model,
+                "owner": owner_local,
+            })
+        })
+        .collect();
     Json(serde_json::json!({
         "domain": state.domain,
         "publicUrl": state.federation.config.public_url,
         "publicKey": state.federation.public_key().to_hex(),
         "protocolVersion": PROTOCOL_VERSION,
         // Advertised inference capability (FI-1) — null when this node hosts
-        // no model.
+        // no default model. `models` lists federation-shared pool entries.
         "inferenceModel": state.inference.model(),
+        "models": models,
     }))
 }
 
@@ -416,11 +437,13 @@ pub async fn peer_infer(
     wave: &str,
     prompt: &str,
     context: &str,
+    model: &str,
 ) -> io::Result<(String, String)> {
     let req = pb::InferRequest {
         wave: wave.to_string(),
         prompt: prompt.to_string(),
         context: context.to_string(),
+        model: model.to_string(),
     }
     .encode_to_vec();
     let bytes = state
@@ -452,17 +475,35 @@ pub async fn handle_infer(
             "not a participant domain".into(),
         ));
     }
-    let provider = state
-        .inference
-        .get()
-        .ok_or_else(|| ApiError(StatusCode::SERVICE_UNAVAILABLE, "no model here".into()))?;
+    // Resolve the target: a specific pool model the peer named (must be
+    // federation-scoped and enabled), otherwise this node's default provider.
+    let (provider, model_id) = if req.model.is_empty() {
+        let p = state
+            .inference
+            .get()
+            .ok_or_else(|| ApiError(StatusCode::SERVICE_UNAVAILABLE, "no model here".into()))?;
+        let id = p.model();
+        (p, id)
+    } else {
+        let m = state
+            .store
+            .get_model(&req.model)
+            .await?
+            .filter(|m| m.enabled && m.scope == "federation")
+            .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such federation model".into()))?;
+        let owner_local = m.owner.split('@').next().unwrap_or(&m.owner).to_string();
+        (
+            state.model_pool.provider_for(&m.base, &m.model),
+            format!("{} · hosted by {owner_local}", m.model),
+        )
+    };
     let text = provider
         .infer(&req.prompt, &req.context)
         .await
         .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("inference: {e}")))?;
     Ok(pb::InferResponse {
         text,
-        model: provider.model(),
+        model: model_id,
     }
     .encode_to_vec())
 }

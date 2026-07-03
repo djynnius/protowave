@@ -32,6 +32,9 @@ impl ApiError {
     pub fn bad_request(msg: impl Into<String>) -> Self {
         Self(StatusCode::BAD_REQUEST, msg.into())
     }
+    pub fn forbidden(msg: impl Into<String>) -> Self {
+        Self(StatusCode::FORBIDDEN, msg.into())
+    }
 }
 
 impl IntoResponse for ApiError {

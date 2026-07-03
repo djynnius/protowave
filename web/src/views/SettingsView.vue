@@ -2,10 +2,10 @@
 // App settings: everyone can edit their profile (first/last name, which
 // replaces their handle once set); the server owner additionally configures
 // the hosted inference backend — architecture (Ollama / Gemini) then model.
-import { onMounted, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSession } from '../stores/session'
-import { api } from '../lib/api'
+import { api, type PoolModel } from '../lib/api'
 import WaveSidebar from '../components/WaveSidebar.vue'
 
 const { t } = useI18n()
@@ -41,6 +41,7 @@ const loaded = ref(false)
 onMounted(async () => {
   first.value = session.firstName
   last.value = session.lastName
+  loadModels()
   if (!session.isOwner) return
   try {
     const s = await api.getSettings()
@@ -64,6 +65,64 @@ async function saveModel() {
   } finally {
     modelSaving.value = false
   }
+}
+
+// ---- inference pool (everyone) ----
+const myModels = ref<PoolModel[]>([])
+const poolModels = ref<PoolModel[]>([])
+const draft = reactive({ label: '', base: 'http://localhost:11434', model: '', scope: 'wave' })
+const poolBusy = ref(false)
+const testing = ref(false)
+const testResult = ref<{ ok: boolean; text: string } | null>(null)
+
+async function loadModels() {
+  const r = await api.listModels().catch(() => ({ mine: [], pool: [] }))
+  myModels.value = r.mine
+  poolModels.value = r.pool
+}
+
+async function testDraft() {
+  if (!draft.base.trim() || !draft.model.trim()) return
+  testing.value = true
+  testResult.value = null
+  try {
+    const r = await api.testModel(draft.base.trim(), draft.model.trim())
+    testResult.value = { ok: r.ok, text: r.ok ? t('reachable') : r.error || t('unreachable') }
+  } finally {
+    testing.value = false
+  }
+}
+
+async function addModel() {
+  if (!draft.label.trim() || !draft.base.trim() || !draft.model.trim()) return
+  poolBusy.value = true
+  try {
+    await api.putModel({
+      label: draft.label.trim(),
+      base: draft.base.trim(),
+      model: draft.model.trim(),
+      scope: draft.scope,
+    })
+    draft.label = ''
+    draft.model = ''
+    testResult.value = null
+    await loadModels()
+  } finally {
+    poolBusy.value = false
+  }
+}
+
+async function removeModel(id: string) {
+  await api.deleteModel(id).catch(() => {})
+  await loadModels()
+}
+
+function scopeLabel(scope: string): string {
+  return scope === 'private'
+    ? t('scopePrivate')
+    : scope === 'federation'
+      ? t('scopeFederation')
+      : t('scopeWave')
 }
 </script>
 
@@ -141,6 +200,63 @@ async function saveModel() {
             </p>
           </template>
           <p v-else class="hint locked">🔒 {{ t('ownerOnly') }}</p>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">{{ t('yourModels') }}</h2>
+          <p class="hint">{{ t('poolHint') }}</p>
+
+          <ul v-if="myModels.length" class="model-list">
+            <li v-for="m in myModels" :key="m.id" class="model-row">
+              <span class="model-dot" :class="{ off: !m.enabled }" />
+              <span class="model-main">
+                <b>{{ m.label || m.model }}</b>
+                <span class="model-meta caption">{{ m.model }} · {{ scopeLabel(m.scope) }}</span>
+              </span>
+              <button class="link-danger" @click="removeModel(m.id)">{{ t('remove') }}</button>
+            </li>
+          </ul>
+          <p v-else class="hint">{{ t('noModelsYet') }}</p>
+
+          <form class="form add-model" @submit.prevent="addModel">
+            <p class="field-label">{{ t('addModel') }}</p>
+            <div class="grid2">
+              <input v-model="draft.label" class="text-input" :placeholder="t('modelLabel')" />
+              <select v-model="draft.scope" class="text-input">
+                <option value="private">{{ t('scopePrivate') }}</option>
+                <option value="wave">{{ t('scopeWave') }}</option>
+                <option value="federation">{{ t('scopeFederation') }}</option>
+              </select>
+              <input v-model="draft.base" class="text-input" :placeholder="t('ollamaUrl')" />
+              <input v-model="draft.model" class="text-input" placeholder="gemma3:270m" />
+            </div>
+            <div class="row">
+              <button type="submit" class="btn btn-tide" :disabled="poolBusy">
+                {{ t('add') }}
+              </button>
+              <button type="button" class="btn" :disabled="testing" @click="testDraft">
+                {{ testing ? t('testing') : t('test') }}
+              </button>
+              <span v-if="testResult" class="caption" :class="testResult.ok ? 'ok-text' : 'bad-text'">
+                {{ testResult.ok ? '✓' : '✕' }} {{ testResult.text }}
+              </span>
+            </div>
+          </form>
+
+          <div v-if="poolModels.length" class="pool">
+            <p class="field-label">{{ t('sharedPool') }}</p>
+            <ul class="model-list">
+              <li v-for="m in poolModels" :key="m.id" class="model-row">
+                <span class="model-dot" />
+                <span class="model-main">
+                  <b>{{ m.label || m.model }}</b>
+                  <span class="model-meta caption">
+                    {{ m.model }} · {{ t('hostedBy') }} @{{ m.ownerName }}
+                  </span>
+                </span>
+              </li>
+            </ul>
+          </div>
         </section>
       </div>
     </main>
@@ -238,6 +354,87 @@ async function saveModel() {
 .active {
   margin-top: 1rem;
   color: var(--steel);
+}
+
+.model-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.model-dot {
+  flex: none;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--crest);
+}
+
+.model-dot.off {
+  background: var(--mist);
+}
+
+.model-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.model-meta {
+  color: var(--steel);
+}
+
+.link-danger {
+  background: none;
+  border: none;
+  color: #d33;
+  font-weight: 600;
+  font-size: 0.8rem;
+  cursor: pointer;
+  flex: none;
+}
+
+.add-model {
+  border-top: 1px solid var(--mist);
+  padding-top: 1rem;
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+
+.pool {
+  border-top: 1px solid var(--mist);
+  padding-top: 1rem;
+  margin-top: 1rem;
+}
+
+.ok-text {
+  color: #0f766e;
+  font-weight: 600;
+}
+
+.bad-text {
+  color: #b45309;
+  font-weight: 600;
+}
+
+@media (max-width: 40rem) {
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 60rem) {

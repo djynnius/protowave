@@ -118,6 +118,10 @@ message InferRequest {
   string wave = 1;
   string prompt = 2;
   string context = 3;
+  // Optional: a specific model id advertised in the responder's
+  // .well-known capability list (FI-1). Empty = the responder's node
+  // default. Lets a router target one node's particular model.
+  string model = 4;
 }
 
 message InferResponse {
