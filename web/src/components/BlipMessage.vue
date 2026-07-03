@@ -28,6 +28,9 @@ const props = defineProps<{
 const emit = defineEmits<{ reply: [id: string]; tag: [tag: string] }>()
 
 const agent = computed(() => isAgent(props.entry.author))
+// Only your own (non-agent) posts can be edited inline.
+const own = computed(() => !agent.value && props.entry.author === props.me)
+const editing = ref(false)
 const root = ref<HTMLElement | null>(null)
 
 const editor = new Editor({
@@ -38,6 +41,17 @@ const editor = new Editor({
     TagsMentions,
   ],
 })
+
+// Toggle edit mode: edits write straight to the shared fragment, so they
+// sync, persist and federate like any change.
+watch(editing, (on) => {
+  editor.setEditable(on)
+  if (on) editor.commands.focus('end')
+})
+
+function toggleEdit() {
+  editing.value = !editing.value
+}
 
 onBeforeUnmount(() => editor.destroy())
 
@@ -50,6 +64,7 @@ watch(
 )
 
 function onClick(event: MouseEvent) {
+  if (editing.value) return // let clicks place the cursor while editing
   const el = (event.target as HTMLElement).closest('.pw-tag')
   if (el) emit('tag', (el.getAttribute('data-token') || '').replace(/^#/, ''))
 }
@@ -69,7 +84,7 @@ defineExpose({ root })
   <article
     ref="root"
     class="msg"
-    :class="{ agent, replying, highlight }"
+    :class="{ agent, replying, highlight, editing }"
     :style="{ '--depth': depth }"
   >
     <span
@@ -94,6 +109,9 @@ defineExpose({ root })
       </div>
       <div class="actions">
         <button class="act" @click="emit('reply', entry.id)">↳ {{ t('reply') }}</button>
+        <button v-if="own" class="act" @click="toggleEdit">
+          {{ editing ? '✓ ' + t('done') : '✎ ' + t('edit') }}
+        </button>
       </div>
     </div>
   </article>
@@ -133,6 +151,20 @@ defineExpose({ root })
 .msg.highlight {
   background: color-mix(in srgb, var(--crest-t) 60%, transparent);
   box-shadow: 0 0 0 1px var(--crest);
+}
+
+.msg.editing {
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--deep);
+}
+
+.msg.editing .actions {
+  opacity: 1;
+}
+
+.msg.editing :deep(.ProseMirror) {
+  outline: none;
+  min-height: 1.4em;
 }
 
 .msg.agent {

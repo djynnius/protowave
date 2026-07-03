@@ -83,6 +83,8 @@ const en = {
   stop: 'Stop',
   isWriting: 'is writing a blip…',
   pickAWave: 'Pick a wave on the left, or start a new one.',
+  edit: 'Edit',
+  done: 'Done',
 }
 
 const de: typeof en = {
