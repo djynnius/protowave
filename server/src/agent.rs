@@ -41,7 +41,6 @@ use crate::AppState;
 
 /// Local part of the wave agent's address (`assistant@domain`).
 pub const AGENT_LOCAL: &str = "assistant";
-const ROOT_BLIP: &str = "b+root";
 const RECENT_BLIPS: usize = 12;
 const RAG_HITS: usize = 4;
 
@@ -217,11 +216,15 @@ impl InferenceHub {
 // Server-authored blips (wire-compatible with web/src/lib/wavemodel.ts).
 // ---------------------------------------------------------------------------
 
-/// Build a yrs update that appends an agent reply blip under the root, then
-/// return the encoded diff. Matches the JS document model: blip content is
-/// an XmlFragment of `<paragraph>` elements in the `blips` map, and a
-/// `{id, author, ts, parent}` entry in the `manifest` array.
-pub fn agent_blip_update(base: &Doc, agent: &str, text: &str) -> Vec<u8> {
+/// Build a yrs update that appends an agent reply blip, then return the
+/// encoded diff. Matches the JS document model: blip content is an
+/// XmlFragment of `<paragraph>` elements in the `blips` map, and a
+/// `{id, author, ts, parent}` entry in the `manifest` array. `parent` is the
+/// blip the reply threads under (e.g. the message that @mentioned the
+/// agent), or `None` for a top-level post — the web client's `threadOrder`
+/// only renders blips reachable from an existing parent, so a stale parent
+/// id would silently orphan the reply.
+pub fn agent_blip_update(base: &Doc, agent: &str, text: &str, parent: Option<&str>) -> Vec<u8> {
     let blips = base.get_or_insert_map("blips");
     let manifest = base.get_or_insert_array("manifest");
     let before = base.transact().state_vector();
@@ -241,7 +244,13 @@ pub fn agent_blip_update(base: &Doc, agent: &str, text: &str) -> Vec<u8> {
         entry.insert("id".into(), Any::from(id.as_str()));
         entry.insert("author".into(), Any::from(agent));
         entry.insert("ts".into(), Any::Number(now_ms() as f64));
-        entry.insert("parent".into(), Any::from(ROOT_BLIP));
+        entry.insert(
+            "parent".into(),
+            match parent {
+                Some(p) => Any::from(p),
+                None => Any::Null,
+            },
+        );
         manifest.push_back(&mut txn, Any::Map(Arc::new(entry)));
     }
     base.transact().encode_diff_v1(&before)
@@ -328,6 +337,7 @@ pub async fn answer_wave(
     wave: &str,
     prompt: &str,
     asker: Option<&protowave_core::ParticipantId>,
+    reply_to: Option<&str>,
 ) -> Result<(String, String), ApiError> {
     let provider = state.inference.get().ok_or_else(|| {
         ApiError(
@@ -362,7 +372,7 @@ pub async fn answer_wave(
                 .transact_mut()
                 .apply_update(yrs::Update::decode_v1(&diff).unwrap());
         }
-        agent_blip_update(&scratch, &agent, &answer)
+        agent_blip_update(&scratch, &agent, &answer, reply_to)
     };
     state
         .engine
@@ -397,7 +407,7 @@ pub async fn ask(
     if !meta.participants.contains(&me.to_string()) {
         return Err(ApiError(StatusCode::FORBIDDEN, "not a participant".into()));
     }
-    let (answer, model) = answer_wave(&state, &req.wave, prompt, Some(&me)).await?;
+    let (answer, model) = answer_wave(&state, &req.wave, prompt, Some(&me), None).await?;
     tracing::info!(wave = %req.wave, by = %me, %model, "agent answered (ask)");
     Ok(Json(serde_json::json!({
         "answer": answer,
@@ -455,7 +465,8 @@ pub fn spawn_mention_worker(state: Arc<AppState>) {
                     continue;
                 }
                 let asker = blip.author.parse::<protowave_core::ParticipantId>().ok();
-                match answer_wave(&state, &wave, &blip.text, asker.as_ref()).await {
+                // Thread the reply under the message that mentioned us.
+                match answer_wave(&state, &wave, &blip.text, asker.as_ref(), Some(&blip.id)).await {
                     Ok((_, model)) => {
                         tracing::info!(%wave, %model, "agent answered (@mention)")
                     }

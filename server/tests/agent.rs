@@ -251,6 +251,7 @@ async fn mentioning_the_assistant_triggers_a_reply_once() {
         &Doc::new(),
         "ada@localhost",
         "hey @assistant, what about the harbor?",
+        None,
     );
     server
         .state
