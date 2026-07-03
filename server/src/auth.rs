@@ -190,6 +190,53 @@ pub async fn login(
     start_session(&state, &participant).await
 }
 
+#[derive(serde::Deserialize)]
+pub struct ChangePasswordRequest {
+    #[serde(rename = "currentPassword")]
+    pub current_password: String,
+    #[serde(rename = "newPassword")]
+    pub new_password: String,
+}
+
+/// Change the signed-in user's password: verify the current one, then
+/// rehash and store the new one. Existing sessions stay valid.
+pub async fn change_password(
+    State(state): State<Arc<AppState>>,
+    CurrentUser(participant): CurrentUser,
+    Json(req): Json<ChangePasswordRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.limits.check(
+        &participant.to_string(),
+        "change-password",
+        10,
+        std::time::Duration::from_secs(3600),
+    )?;
+    if req.new_password.len() < 8 {
+        return Err(ApiError::bad_request(
+            "password must be at least 8 characters",
+        ));
+    }
+    let account = state
+        .store
+        .get_account(&participant)
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "no such account".into()))?;
+    let parsed = PasswordHash::new(&account.password_hash)
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Argon2::default()
+        .verify_password(req.current_password.as_bytes(), &parsed)
+        .map_err(|_| ApiError::forbidden("current password is incorrect"))?;
+
+    let salt = SaltString::generate(&mut OsRng);
+    let hash = Argon2::default()
+        .hash_password(req.new_password.as_bytes(), &salt)
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .to_string();
+    state.store.set_password(&participant, &hash).await?;
+    tracing::info!(%participant, "password changed");
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 pub async fn logout(
     State(state): State<Arc<AppState>>,
     parts: axum::http::request::Parts,

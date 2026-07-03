@@ -145,6 +145,8 @@ pub trait WaveStore: Send + Sync + 'static {
         first: &str,
         last: &str,
     ) -> io::Result<()>;
+    /// Replace an account's password hash (already argon2id-hashed).
+    async fn set_password(&self, participant: &ParticipantId, hash: &str) -> io::Result<()>;
 
     // Server key-value settings (owner marker, runtime model config).
     async fn get_setting(&self, key: &str) -> io::Result<Option<String>>;
@@ -396,6 +398,15 @@ impl WaveStore for FileStore {
         if let Some(acct) = tables.accounts.get_mut(&participant.to_string()) {
             acct.first_name = first.to_string();
             acct.last_name = last.to_string();
+            self.flush_tables(&tables)?;
+        }
+        Ok(())
+    }
+
+    async fn set_password(&self, participant: &ParticipantId, hash: &str) -> io::Result<()> {
+        let mut tables = self.tables.lock().unwrap();
+        if let Some(acct) = tables.accounts.get_mut(&participant.to_string()) {
+            acct.password_hash = hash.to_string();
             self.flush_tables(&tables)?;
         }
         Ok(())

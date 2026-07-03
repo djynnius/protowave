@@ -329,6 +329,18 @@ impl WaveStore for PgStore {
         Ok(())
     }
 
+    async fn set_password(&self, participant: &ParticipantId, hash: &str) -> io::Result<()> {
+        let client = self.client().await?;
+        client
+            .execute(
+                "UPDATE accounts SET password_hash = $2 WHERE participant = $1",
+                &[&participant.to_string(), &hash],
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
     async fn get_setting(&self, key: &str) -> io::Result<Option<String>> {
         let client = self.client().await?;
         let row = client

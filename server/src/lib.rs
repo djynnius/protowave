@@ -196,6 +196,7 @@ pub fn app(state: Arc<AppState>) -> Router {
         .route("/api/register", post(auth::register))
         .route("/api/login", post(auth::login))
         .route("/api/logout", post(auth::logout))
+        .route("/api/password", post(auth::change_password))
         .route("/api/me", get(auth::me))
         .route("/api/waves", get(api::list_waves).post(api::create_wave))
         .route("/api/waves/participants", post(api::add_participant))

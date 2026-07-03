@@ -91,6 +91,11 @@ export const api = {
       body: JSON.stringify({ name, password }),
     }),
   logout: () => request<{ ok: boolean }>('/api/logout', { method: 'POST' }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>('/api/password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
   me: () =>
     request<{ participant: string; firstName?: string; lastName?: string; isOwner?: boolean }>(
       '/api/me',

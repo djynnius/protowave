@@ -67,6 +67,35 @@ async function saveModel() {
   }
 }
 
+// ---- password (everyone) ----
+const pw = reactive({ current: '', next: '', confirm: '' })
+const pwBusy = ref(false)
+const pwMsg = ref<{ ok: boolean; text: string } | null>(null)
+
+async function changePassword() {
+  pwMsg.value = null
+  if (pw.next.length < 8) {
+    pwMsg.value = { ok: false, text: t('passwordTooShort') }
+    return
+  }
+  if (pw.next !== pw.confirm) {
+    pwMsg.value = { ok: false, text: t('passwordMismatch') }
+    return
+  }
+  pwBusy.value = true
+  try {
+    await api.changePassword(pw.current, pw.next)
+    pw.current = ''
+    pw.next = ''
+    pw.confirm = ''
+    pwMsg.value = { ok: true, text: t('passwordChanged') }
+  } catch (e) {
+    pwMsg.value = { ok: false, text: e instanceof Error ? e.message : t('genericError') }
+  } finally {
+    pwBusy.value = false
+  }
+}
+
 // ---- inference pool (everyone) ----
 const myModels = ref<PoolModel[]>([])
 const poolModels = ref<PoolModel[]>([])
@@ -153,6 +182,52 @@ function scopeLabel(scope: string): string {
                 {{ profileSaving ? t('saving') : t('save') }}
               </button>
               <span v-if="profileSaved" class="saved caption">✓ {{ t('saved') }}</span>
+            </div>
+          </form>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">{{ t('security') }}</h2>
+          <p class="hint">{{ t('securityHint') }}</p>
+          <form class="form" @submit.prevent="changePassword">
+            <label class="field">
+              <span class="field-label">{{ t('currentPassword') }}</span>
+              <input
+                v-model="pw.current"
+                type="password"
+                class="text-input"
+                autocomplete="current-password"
+              />
+            </label>
+            <label class="field">
+              <span class="field-label">{{ t('newPassword') }}</span>
+              <input
+                v-model="pw.next"
+                type="password"
+                class="text-input"
+                autocomplete="new-password"
+              />
+            </label>
+            <label class="field">
+              <span class="field-label">{{ t('confirmPassword') }}</span>
+              <input
+                v-model="pw.confirm"
+                type="password"
+                class="text-input"
+                autocomplete="new-password"
+              />
+            </label>
+            <div class="row">
+              <button
+                type="submit"
+                class="btn btn-tide"
+                :disabled="pwBusy || !pw.current || !pw.next"
+              >
+                {{ pwBusy ? t('saving') : t('updatePassword') }}
+              </button>
+              <span v-if="pwMsg" class="caption" :class="pwMsg.ok ? 'ok-text' : 'bad-text'">
+                {{ pwMsg.ok ? '✓' : '✕' }} {{ pwMsg.text }}
+              </span>
             </div>
           </form>
         </section>
