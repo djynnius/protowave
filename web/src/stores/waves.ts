@@ -1,18 +1,29 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { api, type WaveDigest } from '../lib/api'
 
 export const useWaves = defineStore('waves', () => {
   const list = ref<WaveDigest[]>([])
   const loading = ref(false)
+  // The wave currently open; it's always treated as read so a poll refresh
+  // never lights an unread dot on the wave you're looking at.
+  const activeWave = ref<string | null>(null)
+
+  const unreadCount = computed(() => list.value.filter((w) => w.unread).length)
 
   async function refresh() {
     loading.value = true
     try {
       list.value = await api.listWaves()
+      if (activeWave.value) clearUnread(activeWave.value)
     } finally {
       loading.value = false
     }
+  }
+
+  function setActive(wave: string | null) {
+    activeWave.value = wave
+    if (wave) clearUnread(wave)
   }
 
   async function create(title: string): Promise<WaveDigest> {
@@ -44,5 +55,17 @@ export const useWaves = defineStore('waves', () => {
     if (digest) digest.unread = false
   }
 
-  return { list, loading, refresh, create, addParticipant, setTranslation, byId, clearUnread }
+  return {
+    list,
+    loading,
+    unreadCount,
+    activeWave,
+    refresh,
+    setActive,
+    create,
+    addParticipant,
+    setTranslation,
+    byId,
+    clearUnread,
+  }
 })

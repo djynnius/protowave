@@ -142,8 +142,14 @@ const trending = computed(() => {
     .map(([tag]) => tag)
 })
 
+let readTimer: ReturnType<typeof setTimeout> | null = null
 function readManifest() {
   entries.value = manifest(provider.doc).toArray()
+  // A post arrived while this wave is open — keep it marked read (debounced),
+  // both locally and on the server, so it never shows an unread indicator.
+  waves.clearUnread(waveId.value)
+  if (readTimer) clearTimeout(readTimer)
+  readTimer = setTimeout(() => api.markRead(waveId.value).catch(() => {}), 800)
 }
 function readPresence() {
   const seen = new Set<string>()
@@ -181,26 +187,31 @@ onMounted(async () => {
   if (!digest.value) await waves.refresh()
   wireProvider()
   refreshFiles()
+  waves.setActive(waveId.value)
   api.markRead(waveId.value).catch(() => {})
-  waves.clearUnread(waveId.value)
 })
 
 // Switching waves in the sidebar swaps the provider without leaving.
 watch(rootWavelet, (next, prev) => {
   if (next === prev) return
+  // Mark the wave we're leaving as read before switching.
+  const oldWave = prev.replace('/conv+root', '')
+  api.markRead(oldWave).catch(() => {})
   stopPlay()
   unwireProvider()
   replyTarget.value = null
   provider = new WaveletProvider(socket, next)
   wireProvider()
   refreshFiles()
+  waves.setActive(waveId.value)
   api.markRead(waveId.value).catch(() => {})
-  waves.clearUnread(waveId.value)
 })
 
 onBeforeUnmount(() => {
   stopPlay()
+  if (readTimer) clearTimeout(readTimer)
   api.markRead(waveId.value).catch(() => {})
+  waves.setActive(null)
   unwireProvider()
 })
 

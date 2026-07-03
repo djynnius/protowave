@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Left column of the app shell: wordmark, global search, the waves list
 // (most-recent first, unread marked), a new-wave action, and the account.
-import { onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   DialogClose,
@@ -41,7 +41,22 @@ const dialogOpen = ref(false)
 const newTitle = ref('')
 let timer: ReturnType<typeof setTimeout> | null = null
 
-onMounted(() => waves.refresh())
+// Keep unread indicators live: poll the inbox, and refresh on tab focus.
+let poll: ReturnType<typeof setInterval> | null = null
+function onVisible() {
+  if (document.visibilityState === 'visible') waves.refresh()
+}
+onMounted(() => {
+  waves.refresh()
+  poll = setInterval(() => {
+    if (document.visibilityState === 'visible') waves.refresh()
+  }, 15000)
+  document.addEventListener('visibilitychange', onVisible)
+})
+onBeforeUnmount(() => {
+  if (poll) clearInterval(poll)
+  document.removeEventListener('visibilitychange', onVisible)
+})
 
 watch(query, (q) => {
   if (timer) clearTimeout(timer)
@@ -107,7 +122,10 @@ function relative(ms: number): string {
         </button>
       </template>
       <template v-else>
-        <p class="section-label caption">{{ t('theLog') }} · {{ t('mostRecent') }}</p>
+        <p class="section-label caption">
+          {{ t('theLog') }} · {{ t('mostRecent') }}
+          <span v-if="waves.unreadCount" class="unread-badge">{{ waves.unreadCount }}</span>
+        </p>
         <p v-if="!waves.loading && waves.list.length === 0" class="empty">{{ t('becalmed') }}</p>
         <button
           v-for="w in waves.list"
@@ -261,6 +279,26 @@ function relative(ms: number): string {
   background: var(--crest);
   margin-right: 0.3rem;
   vertical-align: 0.1em;
+  animation: ripple 2.4s ease-out infinite;
+}
+
+.wave-item.unread .wave-title {
+  font-weight: 700;
+}
+
+.unread-badge {
+  display: inline-block;
+  min-width: 1.1rem;
+  padding: 0 0.35rem;
+  margin-left: 0.35rem;
+  border-radius: 999px;
+  background: var(--deep);
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-align: center;
+  vertical-align: 0.05em;
 }
 
 .foot {
